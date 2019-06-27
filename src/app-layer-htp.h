@@ -106,6 +106,18 @@ enum {
     HTTP_DECODER_EVENT_REQUEST_LINE_LEADING_WHITESPACE,
     HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS,
     HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER,
+    HTTP_DECODER_EVENT_AUTH_UNRECOGNIZED,
+    HTTP_DECODER_EVENT_REQUEST_HEADER_REPETITION,
+    HTTP_DECODER_EVENT_RESPONSE_HEADER_REPETITION,
+    HTTP_DECODER_EVENT_RESPONSE_MULTIPART_BYTERANGES,
+    HTTP_DECODER_EVENT_RESPONSE_ABNORMAL_TRANSFER_ENCODING,
+    HTTP_DECODER_EVENT_RESPONSE_CHUNKED_OLD_PROTO,
+    HTTP_DECODER_EVENT_RESPONSE_INVALID_PROTOCOL,
+    HTTP_DECODER_EVENT_RESPONSE_INVALID_STATUS,
+    HTTP_DECODER_EVENT_REQUEST_LINE_INCOMPLETE,
+    HTTP_DECODER_EVENT_DOUBLE_ENCODED_URI,
+    HTTP_DECODER_EVENT_REQUEST_LINE_INVALID,
+    HTTP_DECODER_EVENT_REQUEST_BODY_UNEXPECTED,
 
     /* suricata errors/warnings */
     HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR,
@@ -151,8 +163,8 @@ typedef struct HTPCfgRec_ {
 /** Struct used to hold chunks of a body on a request */
 struct HtpBodyChunk_ {
     struct HtpBodyChunk_ *next; /**< Pointer to the next chunk */
-    StreamingBufferSegment sbseg;
     int logged;
+    StreamingBufferSegment sbseg;
 } __attribute__((__packed__));
 typedef struct HtpBodyChunk_ HtpBodyChunk;
 
@@ -206,7 +218,7 @@ typedef struct HtpTxUserData_ {
 
     AppLayerDecoderEvents *decoder_events;          /**< per tx events */
 
-    /** Holds the boundary identificator string if any (used on
+    /** Holds the boundary identification string if any (used on
      *  multipart/form-data only)
      */
     uint8_t *boundary;
@@ -225,7 +237,7 @@ typedef struct HtpState_ {
     htp_connp_t *connp;
     /* Connection structure for each connection */
     htp_conn_t *conn;
-    Flow *f;                /**< Needed to retrieve the original flow when usin HTPLib callbacks */
+    Flow *f;                /**< Needed to retrieve the original flow when using HTPLib callbacks */
     uint64_t transaction_cnt;
     uint64_t store_tx_id;
     FileContainer *files_ts;
@@ -234,6 +246,9 @@ typedef struct HtpState_ {
     uint16_t flags;
     uint16_t events;
     uint16_t htp_messages_offset; /**< offset into conn->messages list */
+    uint32_t file_track_id;             /**< used to assign file track ids to files */
+    uint64_t last_request_data_stamp;
+    uint64_t last_response_data_stamp;
 } HtpState;
 
 /** part of the engine needs the request body (e.g. http_client_body keyword) */

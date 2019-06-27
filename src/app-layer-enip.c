@@ -112,20 +112,9 @@ static uint64_t ENIPGetTxCnt(void *alstate)
     return ((uint64_t) ((ENIPState *) alstate)->transaction_max);
 }
 
-static AppLayerDecoderEvents *ENIPGetEvents(void *state, uint64_t id)
+static AppLayerDecoderEvents *ENIPGetEvents(void *tx)
 {
-    ENIPState         *enip = (ENIPState *) state;
-    ENIPTransaction   *tx;
-
-    if (enip->curr && enip->curr->tx_num == (id + 1))
-        return enip->curr->decoder_events;
-
-    TAILQ_FOREACH(tx, &enip->tx_list, next) {
-        if (tx->tx_num == (id+1))
-            return tx->decoder_events;
-    }
-
-    return NULL;
+    return ((ENIPTransaction *)tx)->decoder_events;
 }
 
 static int ENIPStateGetEventInfo(const char *event_name, int *event_id, AppLayerEventType *event_type)
@@ -135,6 +124,22 @@ static int ENIPStateGetEventInfo(const char *event_name, int *event_id, AppLayer
     if (*event_id == -1) {
         SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%s\" not present in "
                    "enip's enum map table.",  event_name);
+        /* yes this is fatal */
+        return -1;
+    }
+
+    *event_type = APP_LAYER_EVENT_TYPE_TRANSACTION;
+
+    return 0;
+}
+
+static int ENIPStateGetEventInfoById(int event_id, const char **event_name,
+                                     AppLayerEventType *event_type)
+{
+    *event_name = SCMapEnumValueToName(event_id, enip_decoder_event_table);
+    if (*event_name == NULL) {
+        SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%d\" not present in "
+                   "enip's enum map table.",  event_id);
         /* yes this is fatal */
         return -1;
     }
@@ -359,8 +364,8 @@ static int ENIPParse(Flow *f, void *state, AppLayerParserState *pstate,
 
 
 
-static uint16_t ENIPProbingParser(Flow *f, uint8_t *input, uint32_t input_len,
-        uint32_t *offset)
+static uint16_t ENIPProbingParser(Flow *f, uint8_t direction,
+        uint8_t *input, uint32_t input_len, uint8_t *rdir)
 {
     // SCLogDebug("ENIPProbingParser %d", input_len);
     if (input_len < sizeof(ENIPEncapHdr))
@@ -441,6 +446,7 @@ void RegisterENIPUDPParsers(void)
         AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_ENIP, ENIPGetAlstateProgressCompletionStatus);
 
         AppLayerParserRegisterGetEventInfo(IPPROTO_UDP, ALPROTO_ENIP, ENIPStateGetEventInfo);
+        AppLayerParserRegisterGetEventInfoById(IPPROTO_UDP, ALPROTO_ENIP, ENIPStateGetEventInfoById);
 
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_UDP,
                 ALPROTO_ENIP, STREAM_TOSERVER | STREAM_TOCLIENT);

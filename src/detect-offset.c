@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2019 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -37,6 +37,7 @@
 
 #include "flow-var.h"
 
+#include "util-byte.h"
 #include "util-debug.h"
 
 static int DetectOffsetSetup(DetectEngineCtx *, Signature *, const char *);
@@ -62,7 +63,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *offset
     pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs "
-                   "preceding content option");
+                   "preceding content option.");
         goto end;
     }
 
@@ -70,11 +71,11 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *offset
     DetectContentData *cd = (DetectContentData *)pm->ctx;
 
     if (cd->flags & DETECT_CONTENT_STARTS_WITH) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use offset with startswith");
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use offset with startswith.");
         goto end;
     }
     if (cd->flags & DETECT_CONTENT_OFFSET) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use multiple offsets for the same content. ");
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use multiple offsets for the same content.");
         goto end;
     }
     if ((cd->flags & DETECT_CONTENT_WITHIN) || (cd->flags & DETECT_CONTENT_DISTANCE)) {
@@ -86,12 +87,12 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *offset
     }
     if (cd->flags & DETECT_CONTENT_NEGATED && cd->flags & DETECT_CONTENT_FAST_PATTERN) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "can't have a relative "
-                   "negated keyword set along with a fast_pattern");
+                   "negated keyword set along with 'fast_pattern'.");
         goto end;
     }
     if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "can't have a relative "
-                   "keyword set along with a fast_pattern:only;");
+                   "keyword set along with 'fast_pattern:only;'.");
         goto end;
     }
     if (str[0] != '-' && isalpha((unsigned char)str[0])) {
@@ -99,13 +100,17 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *offset
             DetectByteExtractRetrieveSMVar(str, s);
         if (bed_sm == NULL) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "unknown byte_extract var "
-                       "seen in offset - %s\n", str);
+                       "seen in offset - %s.", str);
             goto end;
         }
         cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
         cd->flags |= DETECT_CONTENT_OFFSET_BE;
     } else {
-        cd->offset = (uint32_t)atoi(str);
+        if (ByteExtractStringUint16(&cd->offset, 0, 0, str) != (int)strlen(str))
+        {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "invalid value for offset: %s.", str);
+            goto end;
+        }
         if (cd->depth != 0) {
             if (cd->depth < cd->content_len) {
                 SCLogDebug("depth increased to %"PRIu32" to match pattern len",

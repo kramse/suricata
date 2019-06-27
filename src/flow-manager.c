@@ -41,6 +41,7 @@
 #include "flow-private.h"
 #include "flow-timeout.h"
 #include "flow-manager.h"
+#include "flow-storage.h"
 
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
@@ -122,6 +123,10 @@ typedef struct FlowTimeoutCounters_ {
     uint32_t rows_empty;
     uint32_t rows_busy;
     uint32_t rows_maxlen;
+
+    uint32_t bypassed_count;
+    uint64_t bypassed_pkts;
+    uint64_t bypassed_bytes;
 } FlowTimeoutCounters;
 
 /**
@@ -156,15 +161,18 @@ void FlowDisableFlowManagerThread(void)
     }
     SCMutexUnlock(&tv_root_lock);
 
-    double total_wait_time = 0;
-    /* value in seconds */
-    #define THREAD_KILL_MAX_WAIT_TIME 60
-    /* value in microseconds */
-    #define WAIT_TIME 100
+    struct timeval start_ts;
+    struct timeval cur_ts;
+    gettimeofday(&start_ts, NULL);
 
 again:
-    SCMutexLock(&tv_root_lock);
+    gettimeofday(&cur_ts, NULL);
+    if ((cur_ts.tv_sec - start_ts.tv_sec) > 60) {
+        FatalError(SC_ERR_SHUTDOWN, "unable to get all flow manager "
+                "threads to shutdown in time");
+    }
 
+    SCMutexLock(&tv_root_lock);
     tv = tv_root[TVT_MGMT];
     while (tv != NULL)
     {
@@ -173,15 +181,8 @@ again:
         {
             if (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
                 SCMutexUnlock(&tv_root_lock);
-
-                usleep(WAIT_TIME);
-                total_wait_time += WAIT_TIME / 1000000.0;
-                if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
-                    SCLogError(SC_ERR_FATAL, "Engine unable to "
-                            "disable detect thread - \"%s\".  "
-                            "Killing engine", tv->name);
-                    exit(EXIT_FAILURE);
-                }
+                /* sleep outside lock */
+                SleepMsec(1);
                 goto again;
             }
         }
@@ -240,7 +241,7 @@ static inline uint32_t FlowGetFlowTimeout(const Flow *f, enum FlowState state)
  *  \retval 0 not timed out
  *  \retval 1 timed out
  */
-static int FlowManagerFlowTimeout(const Flow *f, enum FlowState state, struct timeval *ts, int32_t *next_ts)
+static int FlowManagerFlowTimeout(Flow *f, enum FlowState state, struct timeval *ts, int32_t *next_ts)
 {
     /* set the timeout value according to the flow operating mode,
      * flow's state and protocol.*/
@@ -258,6 +259,50 @@ static int FlowManagerFlowTimeout(const Flow *f, enum FlowState state, struct ti
     return 1;
 }
 
+static inline int FlowBypassedTimeout(Flow *f, struct timeval *ts,
+                                      FlowTimeoutCounters *counters)
+{
+    if (SC_ATOMIC_GET(f->flow_state) != FLOW_STATE_CAPTURE_BYPASSED) {
+        return 1;
+    }
+
+    FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
+    if (fc && fc->BypassUpdate) {
+        /* flow will be possibly updated */
+        uint64_t pkts_tosrc = fc->tosrcpktcnt;
+        uint64_t bytes_tosrc = fc->tosrcbytecnt;
+        uint64_t pkts_todst = fc->todstpktcnt;
+        uint64_t bytes_todst = fc->todstbytecnt;
+        bool update = fc->BypassUpdate(f, fc->bypass_data, ts->tv_sec);
+        if (update) {
+            SCLogDebug("Updated flow: %"PRId64"", FlowGetId(f));
+            pkts_tosrc = fc->tosrcpktcnt - pkts_tosrc;
+            bytes_tosrc = fc->tosrcbytecnt - bytes_tosrc;
+            pkts_todst = fc->todstpktcnt - pkts_todst;
+            bytes_todst = fc->todstbytecnt - bytes_todst;
+            if (f->livedev) {
+                SC_ATOMIC_ADD(f->livedev->bypassed,
+                        pkts_tosrc + pkts_todst);
+            }
+            counters->bypassed_pkts += pkts_tosrc + pkts_todst;
+            counters->bypassed_bytes += bytes_tosrc + bytes_todst;
+            return 0;
+        } else {
+            SCLogDebug("No new packet, dead flow %"PRId64"", FlowGetId(f));
+            if (f->livedev) {
+                if (FLOW_IS_IPV4(f)) {
+                    LiveDevSubBypassStats(f->livedev, 1, AF_INET);
+                } else if (FLOW_IS_IPV6(f)) {
+                    LiveDevSubBypassStats(f->livedev, 1, AF_INET6);
+                }
+            }
+            counters->bypassed_count++;
+            return 1;
+        }
+    }
+    return 1;
+}
+
 /** \internal
  *  \brief See if we can really discard this flow. Check use_cnt reference
  *         counter and force reassembly if necessary.
@@ -268,7 +313,8 @@ static int FlowManagerFlowTimeout(const Flow *f, enum FlowState state, struct ti
  *  \retval 0 not timed out just yet
  *  \retval 1 fully timed out, lets kill it
  */
-static int FlowManagerFlowTimedOut(Flow *f, struct timeval *ts)
+static inline int FlowManagerFlowTimedOut(Flow *f, struct timeval *ts,
+                                   FlowTimeoutCounters *counters)
 {
     /* never prune a flow that is used by a packet we
      * are currently processing in one of the threads */
@@ -276,9 +322,15 @@ static int FlowManagerFlowTimedOut(Flow *f, struct timeval *ts)
         return 0;
     }
 
+    if (!FlowBypassedTimeout(f, ts, counters)) {
+        return 0;
+    }
+
     int server = 0, client = 0;
 
     if (!(f->flags & FLOW_TIMEOUT_REASSEMBLY_DONE) &&
+            SC_ATOMIC_GET(f->flow_state) != FLOW_STATE_CAPTURE_BYPASSED &&
+            SC_ATOMIC_GET(f->flow_state) != FLOW_STATE_LOCAL_BYPASSED &&
             FlowForceReassemblyNeedReassembly(f, &server, &client) == 1) {
         FlowForceReassemblyForFlow(f, server, client);
         return 0;
@@ -340,7 +392,7 @@ static uint32_t FlowManagerHashRowTimeout(Flow *f, struct timeval *ts,
 
         /* check if the flow is fully timed out and
          * ready to be discarded. */
-        if (FlowManagerFlowTimedOut(f, ts) == 1) {
+        if (FlowManagerFlowTimedOut(f, ts, counters) == 1) {
             /* remove from the hash */
             if (f->hprev != NULL)
                 f->hprev->hnext = f->hnext;
@@ -587,6 +639,10 @@ typedef struct FlowManagerThreadData_ {
     uint16_t flow_mgr_rows_busy;
     uint16_t flow_mgr_rows_maxlen;
 
+    uint16_t flow_bypassed_cnt_clo;
+    uint16_t flow_bypassed_pkts;
+    uint16_t flow_bypassed_bytes;
+
 } FlowManagerThreadData;
 
 static TmEcode FlowManagerThreadInit(ThreadVars *t, const void *initdata, void **data)
@@ -637,6 +693,10 @@ static TmEcode FlowManagerThreadInit(ThreadVars *t, const void *initdata, void *
     ftd->flow_mgr_rows_empty = StatsRegisterCounter("flow_mgr.rows_empty", t);
     ftd->flow_mgr_rows_busy = StatsRegisterCounter("flow_mgr.rows_busy", t);
     ftd->flow_mgr_rows_maxlen = StatsRegisterCounter("flow_mgr.rows_maxlen", t);
+
+    ftd->flow_bypassed_cnt_clo = StatsRegisterCounter("flow_bypassed.closed", t);
+    ftd->flow_bypassed_pkts = StatsRegisterCounter("flow_bypassed.pkts", t);
+    ftd->flow_bypassed_bytes = StatsRegisterCounter("flow_bypassed.bytes", t);
 
     PacketPoolInit();
     return TM_ECODE_OK;
@@ -704,7 +764,7 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
             FlowUpdateSpareFlows();
 
         /* try to time out flows */
-        FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0};
+        FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0};
         FlowTimeoutHash(&ts, 0 /* check all */, ftd->min, ftd->max, &counters);
 
 
@@ -738,6 +798,10 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         StatsSetUI64(th_v, ftd->flow_mgr_rows_maxlen, (uint64_t)counters.rows_maxlen);
         StatsSetUI64(th_v, ftd->flow_mgr_rows_busy, (uint64_t)counters.rows_busy);
         StatsSetUI64(th_v, ftd->flow_mgr_rows_empty, (uint64_t)counters.rows_empty);
+
+        StatsAddUI64(th_v, ftd->flow_bypassed_cnt_clo, (uint64_t)counters.bypassed_count);
+        StatsAddUI64(th_v, ftd->flow_bypassed_pkts, (uint64_t)counters.bypassed_pkts);
+        StatsAddUI64(th_v, ftd->flow_bypassed_bytes, (uint64_t)counters.bypassed_bytes);
 
         uint32_t len = 0;
         FQLOCK_LOCK(&flow_spare_q);
@@ -1052,13 +1116,17 @@ void FlowDisableFlowRecyclerThread(void)
     }
     SCMutexUnlock(&tv_root_lock);
 
-    double total_wait_time = 0;
-    /* value in seconds */
-#define THREAD_KILL_MAX_WAIT_TIME 60
-    /* value in microseconds */
-#define WAIT_TIME 100
+    struct timeval start_ts;
+    struct timeval cur_ts;
+    gettimeofday(&start_ts, NULL);
 
 again:
+    gettimeofday(&cur_ts, NULL);
+    if ((cur_ts.tv_sec - start_ts.tv_sec) > 60) {
+        FatalError(SC_ERR_SHUTDOWN, "unable to get all flow recycler "
+                "threads to shutdown in time");
+    }
+
     SCMutexLock(&tv_root_lock);
     tv = tv_root[TVT_MGMT];
     while (tv != NULL)
@@ -1067,26 +1135,19 @@ again:
             strlen(thread_name_flow_rec)) == 0)
         {
             if (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
-                if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
-                    SCLogError(SC_ERR_FATAL, "Engine unable to "
-                            "disable detect thread - \"%s\".  "
-                            "Killing engine", tv->name);
-                    exit(EXIT_FAILURE);
-                }
                 SCMutexUnlock(&tv_root_lock);
-                usleep(WAIT_TIME);
-                total_wait_time += WAIT_TIME / 1000000.0;
+                /* sleep outside lock */
+                SleepMsec(1);
                 goto again;
             }
         }
         tv = tv->next;
     }
+    SCMutexUnlock(&tv_root_lock);
 
     /* wake up threads, another try */
     for (u = 0; u < flowrec_number; u++)
         SCCtrlCondSignal(&flow_recycler_ctrl_cond);
-
-    SCMutexUnlock(&tv_root_lock);
 
     /* reset count, so we can kill and respawn (unix socket) */
     SC_ATOMIC_SET(flowrec_cnt, 0);
@@ -1159,7 +1220,8 @@ static int FlowMgrTest01 (void)
 
     int32_t next_ts = 0;
     int state = SC_ATOMIC_GET(f.flow_state);
-    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts) != 1) {
+    FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts, &counters) != 1) {
         FBLOCK_DESTROY(&fb);
         FLOW_DESTROY(&f);
         FlowQueueDestroy(&flow_spare_q);
@@ -1196,7 +1258,7 @@ static int FlowMgrTest02 (void)
     memset(&fb, 0, sizeof(FlowBucket));
     memset(&ts, 0, sizeof(ts));
     memset(&seg, 0, sizeof(TcpSegment));
-    memset(&client, 0, sizeof(TcpSegment));
+    memset(&client, 0, sizeof(TcpStream));
 
     FBLOCK_INIT(&fb);
     FLOW_INITIALIZE(&f);
@@ -1204,9 +1266,7 @@ static int FlowMgrTest02 (void)
 
     TimeGet(&ts);
     TCP_SEG_LEN(&seg) = 3;
-    seg.next = NULL;
-    seg.prev = NULL;
-    client.seg_list = &seg;
+    TCPSEG_RB_INSERT(&client.seg_tree, &seg);
     ssn.client = client;
     ssn.server = client;
     ssn.state = TCP_ESTABLISHED;
@@ -1217,7 +1277,8 @@ static int FlowMgrTest02 (void)
 
     int32_t next_ts = 0;
     int state = SC_ATOMIC_GET(f.flow_state);
-    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts) != 1) {
+    FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts, &counters) != 1) {
         FBLOCK_DESTROY(&fb);
         FLOW_DESTROY(&f);
         FlowQueueDestroy(&flow_spare_q);
@@ -1265,7 +1326,8 @@ static int FlowMgrTest03 (void)
 
     int next_ts = 0;
     int state = SC_ATOMIC_GET(f.flow_state);
-    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts) != 1) {
+    FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts, &counters) != 1) {
         FBLOCK_DESTROY(&fb);
         FLOW_DESTROY(&f);
         FlowQueueDestroy(&flow_spare_q);
@@ -1302,7 +1364,7 @@ static int FlowMgrTest04 (void)
     memset(&fb, 0, sizeof(FlowBucket));
     memset(&ts, 0, sizeof(ts));
     memset(&seg, 0, sizeof(TcpSegment));
-    memset(&client, 0, sizeof(TcpSegment));
+    memset(&client, 0, sizeof(TcpStream));
 
     FBLOCK_INIT(&fb);
     FLOW_INITIALIZE(&f);
@@ -1310,9 +1372,7 @@ static int FlowMgrTest04 (void)
 
     TimeGet(&ts);
     TCP_SEG_LEN(&seg) = 3;
-    seg.next = NULL;
-    seg.prev = NULL;
-    client.seg_list = &seg;
+    TCPSEG_RB_INSERT(&client.seg_tree, &seg);
     ssn.client = client;
     ssn.server = client;
     ssn.state = TCP_ESTABLISHED;
@@ -1324,7 +1384,8 @@ static int FlowMgrTest04 (void)
 
     int next_ts = 0;
     int state = SC_ATOMIC_GET(f.flow_state);
-    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts) != 1) {
+    FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    if (FlowManagerFlowTimeout(&f, state, &ts, &next_ts) != 1 && FlowManagerFlowTimedOut(&f, &ts, &counters) != 1) {
         FBLOCK_DESTROY(&fb);
         FLOW_DESTROY(&f);
         FlowQueueDestroy(&flow_spare_q);
@@ -1376,7 +1437,7 @@ static int FlowMgrTest05 (void)
     struct timeval ts;
     TimeGet(&ts);
     /* try to time out flows */
-    FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0};
+    FlowTimeoutCounters counters = { 0, 0, 0, 0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0};
     FlowTimeoutHash(&ts, 0 /* check all */, 0, flow_config.hash_size, &counters);
 
     if (flow_recycle_q.len > 0) {

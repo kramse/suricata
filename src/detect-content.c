@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2014 Open Information Security Foundation
+/* Copyright (C) 2007-2019 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -140,7 +140,7 @@ int DetectContentDataParse(const char *keyword, const char *contentstr,
                     }
                     else if (str[i] != ',') {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid hex code in "
-                                    "content - %s, hex %c. Invalidating signature", str, str[i]);
+                                    "content - %s, hex %c. Invalidating signature.", str, str[i]);
                         goto error;
                     }
                 } else if (escape) {
@@ -152,13 +152,13 @@ int DetectContentDataParse(const char *keyword, const char *contentstr,
                         str[x] = str[i];
                         x++;
                     } else {
-                        //SCLogDebug("Can't escape %c", str[i]);
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "'%c' has to be escaped", str[i-1]);
                         goto error;
                     }
                     escape = 0;
                     converted = 1;
                 } else if (str[i] == '"') {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid unescaped double quote within content section");
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid unescaped double quote within content section.");
                     goto error;
                 } else {
                     str[x] = str[i];
@@ -169,7 +169,7 @@ int DetectContentDataParse(const char *keyword, const char *contentstr,
 
         if (bin_count % 2 != 0) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid hex code assembly in "
-                       "%s - %s.  Invalidating signature", keyword, contentstr);
+                       "%s - %s.  Invalidating signature.", keyword, contentstr);
             goto error;
         }
 
@@ -354,7 +354,7 @@ error:
 /**
  * \brief this function will SCFree memory associated with DetectContentData
  *
- * \param cd pointer to DetectCotentData
+ * \param cd pointer to DetectContentData
  */
 void DetectContentFree(void *ptr)
 {
@@ -395,13 +395,13 @@ _Bool DetectContentPMATCHValidateCallback(const Signature *s)
         uint32_t right_edge = cd->content_len + cd->offset;
         if (cd->content_len > max_right_edge) {
             SCLogError(SC_ERR_INVALID_SIGNATURE,
-                    "signature can't match as content length %u is bigger than dsize %u",
+                    "signature can't match as content length %u is bigger than dsize %u.",
                     cd->content_len, max_right_edge);
             return FALSE;
         }
         if (right_edge > max_right_edge) {
             SCLogError(SC_ERR_INVALID_SIGNATURE,
-                    "signature can't match as content length %u with offset %u (=%u) is bigger than dsize %u",
+                    "signature can't match as content length %u with offset %u (=%u) is bigger than dsize %u.",
                     cd->content_len, cd->offset, right_edge, max_right_edge);
             return FALSE;
         }
@@ -2196,45 +2196,33 @@ end:
 static int SigTestPositiveTestContent(const char *rule, uint8_t *buf)
 {
     uint16_t buflen = strlen((char *)buf);
-    Packet *p = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
-    int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
+    Packet *p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
+    FAIL_IF_NULL(p);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
     de_ctx->sig_list = SigInit(de_ctx, rule);
-    if (de_ctx->sig_list == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx->sig_list);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+    FAIL_IF_NULL(det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1) != 1) {
-        goto end;
-    }
 
-    result = 1;
-end:
-    if (de_ctx != NULL) {
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
+    FAIL_IF(PacketAlertCheck(p, 1) != 1);
 
-        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-        DetectEngineCtxFree(de_ctx);
-    }
+    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    DetectEngineCtxFree(de_ctx);
 
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -2522,7 +2510,11 @@ end:
  */
 static int SigTest41TestNegatedContent(void)
 {
-    return SigTestPositiveTestContent("alert tcp any any -> any any (msg:\"HTTP URI cap\"; content:!\"GES\"; sid:1;)", (uint8_t *)"GET /one/ HTTP/1.1\r\n Host: one.example.org\r\n\r\n\r\nGET /two/ HTTP/1.1\r\nHost: two.example.org\r\n\r\n\r\n");
+    return SigTestPositiveTestContent("alert tcp any any -> any any "
+            "(msg:\"HTTP URI cap\"; content:!\"GES\"; sid:1;)",
+
+            (uint8_t *)"GET /one/ HTTP/1.1\r\n Host: one.example.org\r\n\r\n\r\n"
+            "GET /two/ HTTP/1.1\r\nHost: two.example.org\r\n\r\n\r\n");
 }
 
 /**
@@ -2773,7 +2765,7 @@ static int SigTest69TestNegatedContent(void)
 
 static int SigTest70TestNegatedContent(void)
 {
-    return SigTestNegativeTestContent("alert tcp any any -> any any (content:\"one\"; content:!\"fourty\"; within:52; distance:45 sid:1;)", (uint8_t *)"one four nine fourteen twentythree thirtyfive fourtysix fiftysix");
+    return SigTestNegativeTestContent("alert tcp any any -> any any (content:\"one\"; content:!\"fourty\"; within:52; sid:1;)", (uint8_t *)"one four nine fourteen twentythree thirtyfive fourtysix fiftysix");
 }
 
 /** \test within and distance */

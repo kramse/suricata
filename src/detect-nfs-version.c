@@ -1,4 +1,4 @@
-/* Copyright (C) 2017 Open Information Security Foundation
+/* Copyright (C) 2017-2019 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -42,13 +42,6 @@
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
-
-#ifndef HAVE_RUST
-void DetectNfsVersionRegister(void)
-{
-}
-
-#else
 
 #include "app-layer-nfs-tcp.h"
 #include "rust.h"
@@ -97,15 +90,14 @@ static int DetectNfsVersionMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
  */
 void DetectNfsVersionRegister (void)
 {
-    sigmatch_table[DETECT_AL_NFS_VERSION].name = "nfs_version";
+    sigmatch_table[DETECT_AL_NFS_VERSION].name = "nfs.version";
+    sigmatch_table[DETECT_AL_NFS_VERSION].alias = "nfs_version";
     sigmatch_table[DETECT_AL_NFS_VERSION].desc = "match NFS version";
     sigmatch_table[DETECT_AL_NFS_VERSION].url = DOC_URL DOC_VERSION "/rules/nfs-keywords.html#version";
-    sigmatch_table[DETECT_AL_NFS_VERSION].Match = NULL;
     sigmatch_table[DETECT_AL_NFS_VERSION].AppLayerTxMatch = DetectNfsVersionMatch;
     sigmatch_table[DETECT_AL_NFS_VERSION].Setup = DetectNfsVersionSetup;
     sigmatch_table[DETECT_AL_NFS_VERSION].Free = DetectNfsVersionFree;
     sigmatch_table[DETECT_AL_NFS_VERSION].RegisterTests = DetectNfsVersionRegisterTests;
-
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 
@@ -333,30 +325,26 @@ error:
 static int DetectNfsVersionSetup (DetectEngineCtx *de_ctx, Signature *s,
                                    const char *rawstr)
 {
-    DetectNfsVersionData *dd = NULL;
-    SigMatch *sm = NULL;
-
     SCLogDebug("\'%s\'", rawstr);
 
     if (DetectSignatureSetAppProto(s, ALPROTO_NFS) != 0)
         return -1;
 
-    dd = DetectNfsVersionParse(rawstr);
+    DetectNfsVersionData *dd = DetectNfsVersionParse(rawstr);
     if (dd == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT,"Parsing \'%s\' failed", rawstr);
-        goto error;
+        return -1;
     }
 
     /* okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
-    sm = SigMatchAlloc();
+    SigMatch *sm = SigMatchAlloc();
     if (sm == NULL)
         goto error;
 
     sm->type = DETECT_AL_NFS_VERSION;
     sm->ctx = (void *)dd;
 
-    s->flags |= SIG_FLAG_STATE_MATCH;
     SCLogDebug("low %u hi %u", dd->lo, dd->hi);
     SigMatchAppendSMToList(s, sm, g_nfs_request_buffer_id);
     return 0;
@@ -632,4 +620,3 @@ void DetectNfsVersionRegisterTests(void)
     UtRegisterTest("ValidityTestParse15", ValidityTestParse15);
 #endif /* UNITTESTS */
 }
-#endif /* HAVE_RUST */

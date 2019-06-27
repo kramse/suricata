@@ -12,7 +12,7 @@ The content keyword is very important in signatures. Between the
 quotation marks you can write on what you would like the signature to
 match. The most simple format of content is::
 
-  content: ”............”;
+  content: "............";
 
 It is possible to use several contents in a signature.
 
@@ -38,7 +38,7 @@ There are characters you can not use in the content because they are
 already important in the signature. For matching on these characters
 you should use the heximal notation. These are::
 
-  “	|22|
+  "	|22|
   ;	|3B|
   :	|3A|
   |	|7C|
@@ -46,16 +46,16 @@ you should use the heximal notation. These are::
 It is a convention to write the heximal notation in upper case characters.
 
 To write for instance ``http://`` in the content of a signature, you
-should write it like this: ``content: “http|3A|//”;`` If you use a
+should write it like this: ``content: "http|3A|//";`` If you use a
 heximal notation in a signature, make sure you always place it between
 pipes. Otherwise the notation will be taken literally as part of the
 content.
 
 A few examples::
 
-  content:“a|0D|bc”;
-  content:”|61 0D 62 63|";
-  content:”a|0D|b|63|”;
+  content:"a|0D|bc";
+  content:"|61 0D 62 63|";
+  content:"a|0D|b|63|";
 
 It is possible to let a signature check the whole payload for a match with the content or to let it check specific parts of the payload. We come to that later.
 If you add nothing special to the signature, it will try to find a match in all the bytes of the payload.
@@ -83,8 +83,8 @@ For example::
   content:"Firefox/3."; distance:0; content:!"Firefox/3.6.13";
   distance:-10; sid:9000000; rev:1;)
 
-You see ``content:!”Firefox/3.6.13”;``. This means an alert will be
-generated if the the used version of Firefox is not 3.6.13.
+You see ``content:!"Firefox/3.6.13";``. This means an alert will be
+generated if the used version of Firefox is not 3.6.13.
 
 .. note:: The following characters must be escaped inside the content:
              ``;`` ``\`` ``"``
@@ -102,7 +102,7 @@ The format of this keyword is::
 
 You have to place it after the content you want to modify, like::
 
-  content: “abc”; nocase;
+  content: "abc"; nocase;
 
 Example nocase:
 
@@ -157,7 +157,7 @@ The keywords offset and depth can be combined and are often used together.
 
 For example::
 
-  content:“def”; offset:3; depth:3;
+  content:"def"; offset:3; depth:3;
 
 If this was used in a signature, it would check the payload from the
 third byte till the sixth byte.
@@ -264,6 +264,169 @@ example of dsize in a rule:
 
     alert udp $EXTERNAL_NET any -> $HOME_NET 65535 (msg:"GPL DELETED EXPLOIT LANDesk Management Suite Alerting Service buffer overflow"; :example-rule-emphasis:`dsize:>268;` reference: bugtraq,23483; reference: cve,2007-1674; classtype: attempted-admin; sid:100000928; rev:1;)
 
+byte_test
+---------
+The ``byte_test`` keyword extracts ``<num of bytes>`` and performs an operation selected with ``<operator>`` against the value in ``<test value>`` at a particular ``<offset>``.
+
+Format::
+  
+  byte_test:<num of bytes>, [!]<operator>, <test value>, <offset> [,relative] \
+  [,<endian>][, string, <num type>][, dce][, bitmask <bitmask value>]; 
+
+
++----------------+------------------------------------------------------------------------------+
+| <num of bytes> | The number of bytes selected from the packet to be converted			|
++----------------+------------------------------------------------------------------------------+
+| <operator>	 | 										|
+|		 | - [!] Negation can prefix other operators					|
+|	         | - < less than								|
+|      	         | - > greater than								|
+|		 | - = equal									|
+|		 | - <= less than or equal							|
+|		 | - >= greater than or equal							|
+|		 | - & bitwise AND								|
+|		 | - ^ bitwise OR								|
++----------------+------------------------------------------------------------------------------+
+| <value>	 | Value to test the converted value against [hex or decimal accepted]		|
++----------------+------------------------------------------------------------------------------+
+| <offset>	 | Number of bytes into the payload						|
++----------------+------------------------------------------------------------------------------+
+| [relative]	 | Offset relative to last content match					|
++----------------+------------------------------------------------------------------------------+
+| [endian]	 | Type of number being read:							|	
+|		 | - big (Most significant byte at lowest address)				|
+|		 | - little (Most significant byte at the highest address)			|
++----------------+------------------------------------------------------------------------------+
+| [string] <num> | 										|
+|		 | - hex - Converted string represented in hex					|
+|		 | - dec - Converted string represented in dedimal				|
+|		 | - oct - Converted string represented in octal				|
++----------------+------------------------------------------------------------------------------+
+| [dce]		 | Allow the DCE module determine the byte order 				|
++----------------+------------------------------------------------------------------------------+
+| [bitmask]	 | Applies the AND operator on the bytes converted				|
++----------------+------------------------------------------------------------------------------+
+
+
+Example::
+
+  alert tcp any any -> any any \
+	 (msg:"Byte_Test Example - Num = Value"; \
+	 content:"|00 01 00 02|"; byte_test:2,=,0x01;)
+
+  alert tcp any any -> any any \
+	 (msg:"Byte_Test Example - Num = Value relative to content"; \
+	 content:"|00 01 00 02|"; byte_test:2,=,0x03,relative;)
+
+  alert tcp any any -> any any \
+	 (msg:"Byte_Test Example - Num != Value"; content:"|00 01 00 02|"; \
+	 byte_test:2,!=,0x06;)
+
+  alert tcp any any -> any any \ 
+         (msg:"Byte_Test Example - Detect Large Values"; content:"|00 01 00 02|"; \
+         byte_test:2,>,1000,relavtive;)
+
+  alert tcp any any -> any any \
+	 (msg:"Byte_Test Example - Lowest bit is set"; \
+	 content:"|00 01 00 02|"; byte_test:2,&,0x01,relative;)
+
+  alert tcp any any -> any any (msg:"Byte_Test Example - Compare to String"; \
+ 	 content:"foobar"; byte_test:4,=,1337,1,relative,string,dec;)
+
+
+byte_jump
+---------
+
+The ``byte_jump`` keyword allows for the ability to select a ``<num of bytes>`` from an ``<offset>`` and moves the detection pointer to that position.  Content matches will then be based off the new position.
+
+Format::
+
+  byte_jump:<num of bytes>, <offset> [, relative][, multiplier <mult_value>] \
+	[, <endian>][, string, <num_type>][, align][, from_beginning][, from_end] \ 
+        [, post_offset <value>][, dce][, bitmask <value>];
+
++-----------------------+-----------------------------------------------------------------------+
+| <num of bytes>	| The number of bytes selected from the packet to be converted		|
++-----------------------+-----------------------------------------------------------------------+
+| <offset>		| Number of bytes into the payload					|
++-----------------------+-----------------------------------------------------------------------+
+| [relative]		| Offset relative to last content match					|
++-----------------------+-----------------------------------------------------------------------+
+| [multiplier] <value>  | Multiple the converted byte by the <value>				|
++-----------------------+-----------------------------------------------------------------------+
+| [endian]		| - big (Most significant byte at lowest address)			|
+|		       	| - little (Most significant byte at the highest address)		|
++-----------------------+-----------------------------------------------------------------------+
+| [string] <num_type>  	| 									|
+|		       	| - hex Converted data is represented in hex				|
+|		       	| - dec Converted data is represented in decimal			|
+|		       	| - oct Converted data is represented as octal				|
++-----------------------+-----------------------------------------------------------------------+
+| [align]		| Rounds the number up to the next 32bit boundary			|
++-----------------------+-----------------------------------------------------------------------+
+| [from_beginning]	| Jumps forward from the beginning of the packet, instead of		|
+|			| where the detection pointer is set					|
++-----------------------+-----------------------------------------------------------------------+
+| [from_end]		| Jump will begin at the end of the payload, instead of			|
+|			| where the detection point is set					|
++-----------------------+-----------------------------------------------------------------------+
+| [post_offset] <value>	| After the jump operation has been performed, it will			|
+|			| jump an additional number of bytes specified by <value>		|
++-----------------------+-----------------------------------------------------------------------+
+| [dce]			| Allow the DCE module determine the byte order				|
++-----------------------+-----------------------------------------------------------------------+
+| [bitmask] <value>	| The AND operator will be applied by <value> and the			|
+|			| converted bytes, then jump operation is performed			|
++-----------------------+-----------------------------------------------------------------------+
+
+Example::
+
+  alert tcp any any -> any any \
+	(msg:"Byte_Jump Example"; \
+	content:"Alice"; byte_jump:2,0; content:"Bob";)
+
+  alert tcp any any -> any any \
+	(msg:"Byte_Jump Multiple Jumps"; \
+	byte_jump:2,0; byte_jump:2,0,relative; content:"foobar"; distance:0; within:6;)
+
+  alert tcp any any -> any any \
+	(msg:"Byte_Jump From the End -8 Bytes"; \
+	byte_jump:0,0, from_end, post_offset -8; \
+	content:"|6c 33 33 74|"; distance:0 within:4;)
+
+
+byte_extract
+------------
+
+The ``byte_extract`` keyword extracts ``<num of bytes>`` at a particular ``<offset>`` and stores it in ``<var_name>``. The value in ``<var_name>`` can be used in any modifier that takes a number as an option and in the case of ``byte_test`` it can be used as a value.
+
+Format::
+
+  byte_extract:<num of bytes>, <offset>, <var_name>, [, relative];
+
+==============	==================================
+ Keyword	Modifier 
+============== 	==================================
+ content	offset,depth,distance,within	
+ byte_test	offset,value		     	
+ byte_jump	offset			     	
+ isdataat	offset				
+==============	==================================
+
+Example::
+
+  alert tcp any any -> any any \
+	 (msg:"Byte_Extract Example Using distance"; \
+	 content:"Alice"; byte_extract:2,0,size; content:"Bob"; distance:size; within:3; sid:1;)
+  alert tcp any any -> any any \
+	 (msg:"Byte_Extract Example Using within"; \
+	 flow:established,to_server; content:"|00 FF|"; \
+	 byte_extract:1,0,len,relative; content:"|5c 00|"; distance:2; within:len; sid:2;)
+  alert tcp any any -> any any \
+	 (msg:"Byte_Extract Example Comparing Bytes"; \
+	 flow:established,to_server; content:"|00 FF|"; \
+	 byte_extract:2,0,cmp_ver,relative; content:"FooBar"; distance:0; byte_test:2,=,cmp_ver,0; sid:3;)
+
 rpc
 ---
 
@@ -353,7 +516,7 @@ These qualities can be modified with the following characters::
 These options are perl compatible modifiers. To use these modifiers,
 you should add them to pcre, behind regex. Like this::
 
-  pcre: “/<regex>/i”;
+  pcre: "/<regex>/i";
 
 *Pcre compatible modifiers*
 
@@ -447,3 +610,4 @@ Suricata has its own specific pcre modifiers. These are:
   buffer as http_host.  W can be combined with /R. Note that R is
   relative to the previous match so both matches have to be in the
   HTTP-Host buffer.
+

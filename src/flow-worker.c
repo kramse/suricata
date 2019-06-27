@@ -59,6 +59,11 @@ typedef struct FlowWorkerThreadData_ {
 
     void *output_thread; /* Output thread data. */
 
+    uint16_t local_bypass_pkts;
+    uint16_t local_bypass_bytes;
+    uint16_t both_bypass_pkts;
+    uint16_t both_bypass_bytes;
+
     PacketQueue pq;
 
 } FlowWorkerThreadData;
@@ -67,14 +72,19 @@ typedef struct FlowWorkerThreadData_ {
  *
  *  Handle flow creation/lookup
  */
-static inline TmEcode FlowUpdate(Packet *p)
+static inline TmEcode FlowUpdate(ThreadVars *tv, FlowWorkerThreadData *fw, Packet *p)
 {
     FlowHandlePacketUpdate(p->flow, p);
 
     int state = SC_ATOMIC_GET(p->flow->flow_state);
     switch (state) {
         case FLOW_STATE_CAPTURE_BYPASSED:
+            StatsAddUI64(tv, fw->both_bypass_pkts, 1);
+            StatsAddUI64(tv, fw->both_bypass_bytes, GET_PKT_LEN(p));
+            return TM_ECODE_DONE;
         case FLOW_STATE_LOCAL_BYPASSED:
+            StatsAddUI64(tv, fw->local_bypass_pkts, 1);
+            StatsAddUI64(tv, fw->local_bypass_bytes, GET_PKT_LEN(p));
             return TM_ECODE_DONE;
         default:
             return TM_ECODE_OK;
@@ -91,6 +101,11 @@ static TmEcode FlowWorkerThreadInit(ThreadVars *tv, const void *initdata, void *
 
     SC_ATOMIC_INIT(fw->detect_thread);
     SC_ATOMIC_SET(fw->detect_thread, NULL);
+
+    fw->local_bypass_pkts = StatsRegisterCounter("flow_bypassed.local_pkts", tv);
+    fw->local_bypass_bytes = StatsRegisterCounter("flow_bypassed.local_bytes", tv);
+    fw->both_bypass_pkts = StatsRegisterCounter("flow_bypassed.local_capture_pkts", tv);
+    fw->both_bypass_bytes = StatsRegisterCounter("flow_bypassed.local_capture_bytes", tv);
 
     fw->dtv = DecodeThreadVarsAlloc(tv);
     if (fw->dtv == NULL) {
@@ -181,7 +196,7 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *pr
         FlowHandlePacket(tv, fw->dtv, p);
         if (likely(p->flow != NULL)) {
             DEBUG_ASSERT_FLOW_LOCKED(p->flow);
-            if (FlowUpdate(p) == TM_ECODE_DONE) {
+            if (FlowUpdate(tv, fw, p) == TM_ECODE_DONE) {
                 FLOWLOCK_UNLOCK(p->flow);
                 return TM_ECODE_OK;
             }
@@ -248,6 +263,8 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *pr
         AppLayerHandleUdp(tv, fw->stream_thread->ra_ctx->app_tctx, p, p->flow);
         FLOWWORKER_PROFILING_END(p, PROFILE_FLOWWORKER_APPLAYERUDP);
     }
+
+    PacketUpdateEngineEventCounters(tv, fw->dtv, p);
 
     /* handle Detect */
     DEBUG_ASSERT_FLOW_LOCKED(p->flow);

@@ -63,7 +63,7 @@ void DetectFlowintRegister(void)
 {
     sigmatch_table[DETECT_FLOWINT].name = "flowint";
     sigmatch_table[DETECT_FLOWINT].desc = "operate on a per-flow integer";
-    sigmatch_table[DETECT_FLOWINT].url = DOC_URL DOC_VERSION "/rules/flowint.html";
+    sigmatch_table[DETECT_FLOWINT].url = DOC_URL DOC_VERSION "/rules/flow-keywords.html#flowint";
     sigmatch_table[DETECT_FLOWINT].Match = DetectFlowintMatch;
     sigmatch_table[DETECT_FLOWINT].Setup = DetectFlowintSetup;
     sigmatch_table[DETECT_FLOWINT].Free = DetectFlowintFree;
@@ -119,7 +119,7 @@ int DetectFlowintMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
         targetval = sfd->target.value;
     }
 
-    SCLogDebug("Our var %s is at idx: %"PRIu16"", sfd->name, sfd->idx);
+    SCLogDebug("Our var %s is at idx: %"PRIu32"", sfd->name, sfd->idx);
 
     if (sfd->modifier == FLOWINT_MODIFIER_SET) {
         FlowVarAddIntNoLock(p->flow, sfd->idx, targetval);

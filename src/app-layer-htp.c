@@ -138,12 +138,24 @@ SCEnumCharMap http_decoder_event_table[ ] = {
         HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG},
     { "RESPONSE_FIELD_TOO_LONG",
         HTTP_DECODER_EVENT_RESPONSE_FIELD_TOO_LONG},
+    { "REQUEST_LINE_INVALID",
+        HTTP_DECODER_EVENT_REQUEST_LINE_INVALID},
+    { "REQUEST_BODY_UNEXPECTED",
+        HTTP_DECODER_EVENT_REQUEST_BODY_UNEXPECTED},
     { "REQUEST_SERVER_PORT_TCP_PORT_MISMATCH",
         HTTP_DECODER_EVENT_REQUEST_SERVER_PORT_TCP_PORT_MISMATCH},
     { "REQUEST_URI_HOST_INVALID",
         HTTP_DECODER_EVENT_URI_HOST_INVALID},
     { "REQUEST_HEADER_HOST_INVALID",
         HTTP_DECODER_EVENT_HEADER_HOST_INVALID},
+    { "REQUEST_AUTH_UNRECOGNIZED",
+        HTTP_DECODER_EVENT_AUTH_UNRECOGNIZED},
+    { "REQUEST_HEADER_REPETITION",
+        HTTP_DECODER_EVENT_REQUEST_HEADER_REPETITION},
+    { "RESPONSE_HEADER_REPETITION",
+        HTTP_DECODER_EVENT_RESPONSE_HEADER_REPETITION},
+    { "DOUBLE_ENCODED_URI",
+        HTTP_DECODER_EVENT_DOUBLE_ENCODED_URI},
     { "URI_DELIM_NON_COMPLIANT",
         HTTP_DECODER_EVENT_URI_DELIM_NON_COMPLIANT},
     { "METHOD_DELIM_NON_COMPLIANT",
@@ -154,6 +166,18 @@ SCEnumCharMap http_decoder_event_table[ ] = {
         HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS},
     { "ABNORMAL_CE_HEADER",
         HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
+    { "RESPONSE_MULTIPART_BYTERANGES",
+        HTTP_DECODER_EVENT_RESPONSE_MULTIPART_BYTERANGES},
+    { "RESPONSE_ABNORMAL_TRANSFER_ENCODING",
+        HTTP_DECODER_EVENT_RESPONSE_ABNORMAL_TRANSFER_ENCODING},
+    { "RESPONSE_CHUNKED_OLD_PROTO",
+        HTTP_DECODER_EVENT_RESPONSE_CHUNKED_OLD_PROTO},
+    { "RESPONSE_INVALID_PROTOCOL",
+        HTTP_DECODER_EVENT_RESPONSE_INVALID_PROTOCOL},
+    { "RESPONSE_INVALID_STATUS",
+        HTTP_DECODER_EVENT_RESPONSE_INVALID_STATUS},
+    { "REQUEST_LINE_INCOMPLETE",
+        HTTP_DECODER_EVENT_REQUEST_LINE_INCOMPLETE},
 
     /* suricata warnings/errors */
     { "MULTIPART_GENERIC_ERROR",
@@ -263,19 +287,16 @@ static void HTPSetEvent(HtpState *s, HtpTxUserData *htud, uint8_t e)
     SCLogDebug("couldn't set event %u", e);
 }
 
-static AppLayerDecoderEvents *HTPGetEvents(void *state, uint64_t tx_id)
+static AppLayerDecoderEvents *HTPGetEvents(void *tx)
 {
-    SCLogDebug("get HTTP events for TX %"PRIu64, tx_id);
+    SCLogDebug("get HTTP events for TX %p", tx);
 
-    HtpState *s = (HtpState *)state;
-    htp_tx_t *tx = HTPStateGetTx(s, tx_id);
-    if (tx != NULL) {
-        HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
-        if (htud != NULL) {
-            SCLogDebug("has htud, htud->decoder_events %p", htud->decoder_events);
-            return htud->decoder_events;
-        }
+    HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
+    if (htud != NULL) {
+        SCLogDebug("has htud, htud->decoder_events %p", htud->decoder_events);
+        return htud->decoder_events;
     }
+
     return NULL;
 }
 
@@ -485,6 +506,7 @@ struct {
 /*    { "Invalid authority port", HTTP_DECODER_EVENT_INVALID_AUTHORITY_PORT}, htp no longer returns this error */
     { "Request buffer over", HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG},
     { "Response buffer over", HTTP_DECODER_EVENT_RESPONSE_FIELD_TOO_LONG},
+    { "C-T multipart/byteranges in responses not supported", HTTP_DECODER_EVENT_RESPONSE_MULTIPART_BYTERANGES},
 };
 
 struct {
@@ -511,6 +533,14 @@ struct {
     { "C-E gzip has abnormal value", HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
     { "C-E deflate has abnormal value", HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
     { "C-E unknown setting", HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
+    { "Excessive request header repetitions", HTTP_DECODER_EVENT_REQUEST_HEADER_REPETITION},
+    { "Excessive response header repetitions", HTTP_DECODER_EVENT_RESPONSE_HEADER_REPETITION},
+    { "Transfer-encoding has abnormal chunked value", HTTP_DECODER_EVENT_RESPONSE_ABNORMAL_TRANSFER_ENCODING},
+    { "Chunked transfer-encoding on HTTP/0.9 or HTTP/1.0", HTTP_DECODER_EVENT_RESPONSE_CHUNKED_OLD_PROTO},
+    { "Invalid response line: invalid protocol", HTTP_DECODER_EVENT_RESPONSE_INVALID_PROTOCOL},
+    { "Invalid response line: invalid response status", HTTP_DECODER_EVENT_RESPONSE_INVALID_STATUS},
+    { "Request line incomplete", HTTP_DECODER_EVENT_REQUEST_LINE_INCOMPLETE},
+    { "Unexpected request body", HTTP_DECODER_EVENT_REQUEST_BODY_UNEXPECTED},
 };
 
 #define HTP_ERROR_MAX (sizeof(htp_errors) / sizeof(htp_errors[0]))
@@ -641,6 +671,20 @@ static inline void HTPErrorCheckTxRequestFlags(HtpState *s, htp_tx_t *tx)
             HTPSetEvent(s, htud,
                     HTTP_DECODER_EVENT_HEADER_HOST_INVALID);
     }
+    if (tx->request_auth_type == HTP_AUTH_UNRECOGNIZED) {
+        HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
+        if (htud == NULL)
+            return;
+        HTPSetEvent(s, htud, HTTP_DECODER_EVENT_AUTH_UNRECOGNIZED);
+    }
+    if (tx->is_protocol_0_9 && tx->request_method_number == HTP_M_UNKNOWN &&
+        (tx->request_protocol_number == HTP_PROTOCOL_INVALID ||
+         tx->request_protocol_number == HTP_PROTOCOL_UNKNOWN)) {
+        HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
+        if (htud == NULL)
+            return;
+        HTPSetEvent(s, htud, HTTP_DECODER_EVENT_REQUEST_LINE_INVALID);
+    }
 }
 
 static int Setup(Flow *f, HtpState *hstate)
@@ -695,6 +739,10 @@ static int Setup(Flow *f, HtpState *hstate)
 
     htp_connp_open(hstate->connp, NULL, f->sp, NULL, f->dp, &f->startts);
 
+    StreamTcpReassemblySetMinInspectDepth(f->protoctx, STREAM_TOSERVER,
+            htp_cfg_rec->request.inspect_min_size);
+    StreamTcpReassemblySetMinInspectDepth(f->protoctx, STREAM_TOCLIENT,
+            htp_cfg_rec->response.inspect_min_size);
     return 0;
 error:
     return -1;
@@ -1629,6 +1677,11 @@ static int HtpResponseBodyHandle(HtpState *hstate, HtpTxUserData *htud,
                 htud->tcflags |= HTP_FILENAME_SET;
                 htud->tcflags &= ~HTP_DONTSTORE;
             }
+            //set range if present
+            htp_header_t *h_content_range = htp_table_get_c(tx->response_headers, "content-range");
+            if (h_content_range != NULL) {
+                HTPFileSetRange(hstate, h_content_range->value);
+            }
         }
     }
     else
@@ -1760,9 +1813,41 @@ static int HTPCallbackRequestBodyData(htp_tx_data_t *d)
             HtpRequestBodyHandlePUT(hstate, tx_ud, d->tx, (uint8_t *)d->data, (uint32_t)d->len);
         }
 
+    } else {
+        if (tx_ud->tsflags & HTP_FILENAME_SET) {
+            SCLogDebug("closing file that was being stored");
+            (void)HTPFileClose(hstate, NULL, 0, FILE_TRUNCATED, STREAM_TOSERVER);
+            tx_ud->tsflags &= ~HTP_FILENAME_SET;
+        }
     }
 
 end:
+    if (hstate->conn != NULL) {
+        SCLogDebug("checking body size %"PRIu64" against inspect limit %u (cur %"PRIu64", last %"PRIu64")",
+                tx_ud->request_body.content_len_so_far,
+                hstate->cfg->request.inspect_min_size,
+                (uint64_t)hstate->conn->in_data_counter, hstate->last_request_data_stamp);
+
+        /* if we reach the inspect_min_size we'll trigger inspection,
+         * so make sure that raw stream is also inspected. Set the
+         * data to be used to the amount of raw bytes we've seen to
+         * get here. */
+        if (tx_ud->request_body.body_inspected == 0 &&
+            tx_ud->request_body.content_len_so_far >= hstate->cfg->request.inspect_min_size) {
+            if ((uint64_t)hstate->conn->in_data_counter > hstate->last_request_data_stamp &&
+                (uint64_t)hstate->conn->in_data_counter - hstate->last_request_data_stamp < (uint64_t)UINT_MAX)
+            {
+                uint32_t x = (uint32_t)((uint64_t)hstate->conn->in_data_counter - hstate->last_request_data_stamp);
+
+                /* body still in progress, but due to min inspect size we need to inspect now */
+                StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOSERVER, x);
+                AppLayerParserTriggerRawStreamReassembly(hstate->f, STREAM_TOSERVER);
+            }
+        /* after the start of the body, disable the depth logic */
+        } else if (tx_ud->request_body.body_inspected > 0) {
+            StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOSERVER, 0);
+        }
+    }
     SCReturnInt(HTP_OK);
 }
 
@@ -1834,6 +1919,31 @@ static int HTPCallbackResponseBodyData(htp_tx_data_t *d)
         }
     }
 
+    if (hstate->conn != NULL) {
+        SCLogDebug("checking body size %"PRIu64" against inspect limit %u (cur %"PRIu64", last %"PRIu64")",
+                tx_ud->response_body.content_len_so_far,
+                hstate->cfg->response.inspect_min_size,
+                (uint64_t)hstate->conn->in_data_counter, hstate->last_response_data_stamp);
+        /* if we reach the inspect_min_size we'll trigger inspection,
+         * so make sure that raw stream is also inspected. Set the
+         * data to be used to the amount of raw bytes we've seen to
+         * get here. */
+        if (tx_ud->response_body.body_inspected == 0 &&
+            tx_ud->response_body.content_len_so_far >= hstate->cfg->response.inspect_min_size) {
+            if ((uint64_t)hstate->conn->out_data_counter > hstate->last_response_data_stamp &&
+                (uint64_t)hstate->conn->out_data_counter - hstate->last_response_data_stamp < (uint64_t)UINT_MAX)
+            {
+                uint32_t x = (uint32_t)((uint64_t)hstate->conn->out_data_counter - hstate->last_response_data_stamp);
+
+                /* body still in progress, but due to min inspect size we need to inspect now */
+                StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOCLIENT, x);
+                AppLayerParserTriggerRawStreamReassembly(hstate->f, STREAM_TOCLIENT);
+            }
+        /* after the start of the body, disable the depth logic */
+        } else if (tx_ud->response_body.body_inspected > 0) {
+            StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOCLIENT, 0);
+        }
+    }
     SCReturnInt(HTP_OK);
 }
 
@@ -1896,6 +2006,41 @@ static int HTPCallbackResponseHasTrailer(htp_tx_t *tx)
     return HTP_OK;
 }
 
+/**\internal
+ * \brief called at start of request
+ * Set min inspect size.
+ */
+static int HTPCallbackRequestStart(htp_tx_t *tx)
+{
+    HtpState *hstate = htp_connp_get_user_data(tx->connp);
+    if (hstate == NULL) {
+        SCReturnInt(HTP_ERROR);
+    }
+
+    if (hstate->cfg)
+        StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOSERVER,
+                hstate->cfg->request.inspect_min_size);
+    SCReturnInt(HTP_OK);
+}
+
+/**\internal
+ * \brief called at start of response
+ * Set min inspect size.
+ */
+static int HTPCallbackResponseStart(htp_tx_t *tx)
+{
+    HtpState *hstate = htp_connp_get_user_data(tx->connp);
+    if (hstate == NULL) {
+        SCReturnInt(HTP_ERROR);
+    }
+
+    if (hstate->cfg)
+        StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOCLIENT,
+                hstate->cfg->response.inspect_min_size);
+    SCReturnInt(HTP_OK);
+}
+
+
 /**
  *  \brief  callback for request to store the recent incoming request
             in to the recent_in_tx for the given htp state
@@ -1928,9 +2073,12 @@ static int HTPCallbackRequest(htp_tx_t *tx)
             SCLogDebug("closing file that was being stored");
             (void)HTPFileClose(hstate, NULL, 0, 0, STREAM_TOSERVER);
             htud->tsflags &= ~HTP_FILENAME_SET;
+            StreamTcpReassemblySetMinInspectDepth(hstate->f->protoctx, STREAM_TOSERVER,
+                    (uint32_t)hstate->conn->in_data_counter);
         }
     }
 
+    hstate->last_request_data_stamp = (uint64_t)hstate->conn->in_data_counter;
     /* request done, do raw reassembly now to inspect state and stream
      * at the same time. */
     AppLayerParserTriggerRawStreamReassembly(hstate->f, STREAM_TOSERVER);
@@ -1986,6 +2134,7 @@ static int HTPCallbackResponse(htp_tx_t *tx)
         }
     }
 
+    hstate->last_response_data_stamp = (uint64_t)hstate->conn->out_data_counter;
     SCReturnInt(HTP_OK);
 }
 
@@ -2020,26 +2169,46 @@ static int HTPCallbackRequestLine(htp_tx_t *tx)
     return HTP_OK;
 }
 
-static int HTPCallbackDoubleDecodeQuery(htp_tx_t *tx)
+static int HTPCallbackDoubleDecodeUriPart(htp_tx_t *tx, bstr *part)
 {
-    if (tx->parsed_uri == NULL || tx->parsed_uri->query == NULL)
+    if (part == NULL)
         return HTP_OK;
 
     uint64_t flags = 0;
-    htp_urldecode_inplace(tx->cfg, HTP_DECODER_URLENCODED, tx->parsed_uri->query, &flags);
+    size_t prevlen = bstr_len(part);
+    htp_status_t res = htp_urldecode_inplace(tx->cfg, HTP_DECODER_URLENCODED, part, &flags);
+    // shorter string means that uri was encoded
+    if (res == HTP_OK && prevlen > bstr_len(part)) {
+        HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
+        if (likely(htud == NULL)) {
+            htud = HTPCalloc(1, sizeof(*htud));
+            if (unlikely(htud == NULL))
+                return HTP_OK;
+            htp_tx_set_user_data(tx, htud);
+        }
+        HtpState *s = htp_connp_get_user_data(tx->connp);
+        if (s == NULL)
+            return HTP_OK;
+        HTPSetEvent(s, htud, HTTP_DECODER_EVENT_DOUBLE_ENCODED_URI);
+    }
 
     return HTP_OK;
 }
 
-static int HTPCallbackDoubleDecodePath(htp_tx_t *tx)
+static int HTPCallbackDoubleDecodeQuery(htp_tx_t *tx)
 {
-    if (tx->parsed_uri == NULL || tx->parsed_uri->path == NULL)
+    if (tx->parsed_uri == NULL)
         return HTP_OK;
 
-    uint64_t flags = 0;
-    htp_urldecode_inplace(tx->cfg, HTP_DECODER_URL_PATH, tx->parsed_uri->path, &flags);
+    return HTPCallbackDoubleDecodeUriPart(tx, tx->parsed_uri->query);
+}
 
-    return HTP_OK;
+static int HTPCallbackDoubleDecodePath(htp_tx_t *tx)
+{
+    if (tx->parsed_uri == NULL)
+        return HTP_OK;
+
+    return HTPCallbackDoubleDecodeUriPart(tx, tx->parsed_uri->path);
 }
 
 static int HTPCallbackRequestHeaderData(htp_tx_data_t *tx_data)
@@ -2143,11 +2312,13 @@ static void HTPConfigSetDefaultsPhase1(HTPCfgRec *cfg_prec)
     htp_config_register_request_body_data(cfg_prec->cfg, HTPCallbackRequestBodyData);
     htp_config_register_response_body_data(cfg_prec->cfg, HTPCallbackResponseBodyData);
 
+    htp_config_register_request_start(cfg_prec->cfg, HTPCallbackRequestStart);
     htp_config_register_request_complete(cfg_prec->cfg, HTPCallbackRequest);
+
+    htp_config_register_response_start(cfg_prec->cfg, HTPCallbackResponseStart);
     htp_config_register_response_complete(cfg_prec->cfg, HTPCallbackResponse);
 
     htp_config_set_parse_request_cookies(cfg_prec->cfg, 0);
-    htp_config_set_parse_request_auth(cfg_prec->cfg, 0);
 
     /* don't convert + to space by default */
     htp_config_set_plusspace_decode(cfg_prec->cfg, HTP_DECODER_URLENCODED, 0);
@@ -2340,13 +2511,13 @@ static void HTPConfigParseParameters(HTPCfgRec *cfg_prec, ConfNode *s,
                 exit(EXIT_FAILURE);
             }
 
-        } else if (strcasecmp("double-decode-path", p->name) == 0) {
+        } else if (strcasecmp("double-decode-query", p->name) == 0) {
             if (ConfValIsTrue(p->val)) {
                 htp_config_register_request_line(cfg_prec->cfg,
                                                  HTPCallbackDoubleDecodeQuery);
             }
 
-        } else if (strcasecmp("double-decode-query", p->name) == 0) {
+        } else if (strcasecmp("double-decode-path", p->name) == 0) {
             if (ConfValIsTrue(p->val)) {
                 htp_config_register_request_line(cfg_prec->cfg,
                                                  HTPCallbackDoubleDecodePath);
@@ -2718,6 +2889,22 @@ static int HTPStateGetEventInfo(const char *event_name,
     return 0;
 }
 
+static int HTPStateGetEventInfoById(int event_id, const char **event_name,
+                                    AppLayerEventType *event_type)
+{
+    *event_name = SCMapEnumValueToName(event_id, http_decoder_event_table);
+    if (*event_name == NULL) {
+        SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%d\" not present in "
+                   "http's enum map table.",  event_id);
+        /* this should be treated as fatal */
+        return -1;
+    }
+
+    *event_type = APP_LAYER_EVENT_TYPE_TRANSACTION;
+
+    return 0;
+}
+
 static void HTPStateTruncate(void *state, uint8_t direction)
 {
     FileContainer *fc = HTPStateGetFiles(state, direction);
@@ -2863,6 +3050,7 @@ void RegisterHTPParsers(void)
                                                                HTPStateGetAlstateProgressCompletionStatus);
         AppLayerParserRegisterGetEventsFunc(IPPROTO_TCP, ALPROTO_HTTP, HTPGetEvents);
         AppLayerParserRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_HTTP, HTPStateGetEventInfo);
+        AppLayerParserRegisterGetEventInfoById(IPPROTO_TCP, ALPROTO_HTTP, HTPStateGetEventInfoById);
 
         AppLayerParserRegisterTruncateFunc(IPPROTO_TCP, ALPROTO_HTTP, HTPStateTruncate);
         AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_HTTP,
@@ -5948,7 +6136,8 @@ libhtp:\n\
     FAIL_IF(tx->request_method_number != HTP_M_GET);
     FAIL_IF(tx->request_protocol_number != HTP_PROTOCOL_1_1);
 
-    AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
+    void *txtmp = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
+    AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP, txtmp);
     FAIL_IF_NULL(decoder_events);
 
     FAIL_IF(decoder_events->events[0] != HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG);
@@ -6065,7 +6254,8 @@ libhtp:\n\
     }
 
     FLOWLOCK_WRLOCK(f);
-    AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
+    void *txtmp = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
+    AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP, txtmp);
     if (decoder_events != NULL) {
         printf("app events: ");
         FLOWLOCK_UNLOCK(f);
@@ -6147,7 +6337,8 @@ static int HTPParserTest16(void)
     }
 
     FLOWLOCK_WRLOCK(f);
-    AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
+    void *txtmp = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
+    AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP, txtmp);
     if (decoder_events == NULL) {
         printf("no app events: ");
         FLOWLOCK_UNLOCK(f);
@@ -6817,6 +7008,115 @@ static int HTPParserTest24(void)
     PASS;
 }
 
+/** \test multi transactions and cleanup */
+static int HTPParserTest25(void)
+{
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    FAIL_IF_NULL(alp_tctx);
+
+    StreamTcpInitConfig(TRUE);
+    TcpSession ssn;
+    memset(&ssn, 0, sizeof(ssn));
+
+    Flow *f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    FAIL_IF_NULL(f);
+    f->protoctx = &ssn;
+    f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
+
+    const char *str = "GET / HTTP/1.1\r\nHost: www.google.com\r\nUser-Agent: Suricata/1.0\r\n\r\n";
+    int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER | STREAM_START, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+
+    str = "HTTP 1.1 200 OK\r\nServer: Suricata/1.0\r\nContent-Length: 8\r\n\r\nSuricata";
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT | STREAM_START, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+
+    AppLayerParserTransactionsCleanup(f);
+
+    uint64_t ret[4];
+    UTHAppLayerParserStateGetIds(f->alparser, &ret[0], &ret[1], &ret[2], &ret[3]);
+    FAIL_IF_NOT(ret[0] == 8); // inspect_id[0]
+    FAIL_IF_NOT(ret[1] == 8); // inspect_id[1]
+    FAIL_IF_NOT(ret[2] == 8); // log_id
+    FAIL_IF_NOT(ret[3] == 8); // min_id
+
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER | STREAM_EOF, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    AppLayerParserTransactionsCleanup(f);
+
+    UTHAppLayerParserStateGetIds(f->alparser, &ret[0], &ret[1], &ret[2], &ret[3]);
+    FAIL_IF_NOT(ret[0] == 8); // inspect_id[0] not updated by ..Cleanup() until full tx is done
+    FAIL_IF_NOT(ret[1] == 8); // inspect_id[1]
+    FAIL_IF_NOT(ret[2] == 8); // log_id
+    FAIL_IF_NOT(ret[3] == 8); // min_id
+
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOCLIENT | STREAM_EOF, (uint8_t *)str, strlen(str));
+    FAIL_IF_NOT(r == 0);
+    AppLayerParserTransactionsCleanup(f);
+
+    UTHAppLayerParserStateGetIds(f->alparser, &ret[0], &ret[1], &ret[2], &ret[3]);
+    FAIL_IF_NOT(ret[0] == 9); // inspect_id[0]
+    FAIL_IF_NOT(ret[1] == 9); // inspect_id[1]
+    FAIL_IF_NOT(ret[2] == 9); // log_id
+    FAIL_IF_NOT(ret[3] == 9); // min_id
+
+    HtpState *http_state = f->alstate;
+    FAIL_IF_NULL(http_state);
+
+    AppLayerParserThreadCtxFree(alp_tctx);
+    StreamTcpFreeConfig(TRUE);
+    UTHFreeFlow(f);
+
+    PASS;
+}
+
 #endif /* UNITTESTS */
 
 /**
@@ -6873,6 +7173,7 @@ void HTPParserRegisterTests(void)
     UtRegisterTest("HTPParserTest22", HTPParserTest22);
     UtRegisterTest("HTPParserTest23", HTPParserTest23);
     UtRegisterTest("HTPParserTest24", HTPParserTest24);
+    UtRegisterTest("HTPParserTest25", HTPParserTest25);
 
     HTPFileParserRegisterTests();
     HTPXFFParserRegisterTests();

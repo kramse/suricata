@@ -186,6 +186,23 @@ static int ModbusStateGetEventInfo(const char *event_name, int *event_id, AppLay
     return 0;
 }
 
+static int ModbusStateGetEventInfoById(int event_id, const char **event_name,
+                                       AppLayerEventType *event_type)
+{
+    *event_name = SCMapEnumValueToName(event_id, modbus_decoder_event_table);
+
+    if (*event_name == NULL) {
+        SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%d\" not present in "
+                   "modbus's enum map table.",  event_id);
+        /* yes this is fatal */
+        return -1;
+    }
+
+    *event_type = APP_LAYER_EVENT_TYPE_TRANSACTION;
+
+    return 0;
+}
+
 static void ModbusSetEvent(ModbusState *modbus, uint8_t e)
 {
     if (modbus && modbus->curr) {
@@ -197,20 +214,9 @@ static void ModbusSetEvent(ModbusState *modbus, uint8_t e)
         SCLogDebug("couldn't set event %u", e);
 }
 
-static AppLayerDecoderEvents *ModbusGetEvents(void *state, uint64_t id)
+static AppLayerDecoderEvents *ModbusGetEvents(void *tx)
 {
-    ModbusState         *modbus = (ModbusState *) state;
-    ModbusTransaction   *tx;
-
-    if (modbus->curr && modbus->curr->tx_num == (id + 1))
-        return modbus->curr->decoder_events;
-
-    TAILQ_FOREACH(tx, &modbus->tx_list, next) {
-        if (tx->tx_num == (id+1))
-            return tx->decoder_events;
-    }
-
-    return NULL;
+    return ((ModbusTransaction *)tx)->decoder_events;
 }
 
 static int ModbusGetAlstateProgress(void *modbus_tx, uint8_t direction)
@@ -1427,9 +1433,10 @@ static void ModbusStateFree(void *state)
 }
 
 static uint16_t ModbusProbingParser(Flow *f,
+                                    uint8_t direction,
                                     uint8_t     *input,
                                     uint32_t    input_len,
-                                    uint32_t    *offset)
+                                    uint8_t *rdir)
 {
     ModbusHeader *header = (ModbusHeader *) input;
 
@@ -1537,6 +1544,7 @@ void RegisterModbusParsers(void)
                                                                 ModbusGetAlstateProgressCompletionStatus);
 
         AppLayerParserRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_MODBUS, ModbusStateGetEventInfo);
+        AppLayerParserRegisterGetEventInfoById(IPPROTO_TCP, ALPROTO_MODBUS, ModbusStateGetEventInfoById);
 
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP, ALPROTO_MODBUS, STREAM_TOSERVER);
 

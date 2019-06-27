@@ -36,14 +36,6 @@
 
 #include "app-layer-tftp.h"
 
-#ifndef HAVE_RUST
-
-void RegisterTFTPParsers(void)
-{
-}
-
-#else
-
 #include "rust-tftp-tftp-gen.h"
 
 /* The default port to probe if not provided in the configuration file. */
@@ -52,27 +44,6 @@ void RegisterTFTPParsers(void)
 /* The minimum size for an message. For some protocols this might
  * be the size of a header. */
 #define TFTP_MIN_FRAME_LEN 4
-
-/* Enum of app-layer events for an echo protocol. Normally you might
- * have events for errors in parsing data, like unexpected data being
- * received. For echo we'll make something up, and log an app-layer
- * level alert if an empty message is received.
- *
- * Example rule:
- *
- * alert tftp any any -> any any (msg:"SURICATA TFTP empty message"; \
- *    app-layer-event:tftp.empty_message; sid:X; rev:Y;)
- */
-enum {
-    TFTP_DECODER_EVENT_EMPTY_MESSAGE,
-};
-
-SCEnumCharMap tftp_decoder_event_table[] = {
-    {"EMPTY_MESSAGE", TFTP_DECODER_EVENT_EMPTY_MESSAGE},
-
-    // event table must be NULL-terminated
-    { NULL, -1 },
-};
 
 static void *TFTPStateAlloc(void)
 {
@@ -101,7 +72,7 @@ static int TFTPStateGetEventInfo(const char *event_name, int *event_id,
     return -1;
 }
 
-static AppLayerDecoderEvents *TFTPGetEvents(void *state, uint64_t tx_id)
+static AppLayerDecoderEvents *TFTPGetEvents(void *tx)
 {
     return NULL;
 }
@@ -112,8 +83,8 @@ static AppLayerDecoderEvents *TFTPGetEvents(void *state, uint64_t tx_id)
  * \retval ALPROTO_TFTP if it looks like echo, otherwise
  *     ALPROTO_UNKNOWN.
  */
-static AppProto TFTPProbingParser(Flow *f, uint8_t *input, uint32_t input_len,
-    uint32_t *offset)
+static AppProto TFTPProbingParser(Flow *f, uint8_t direction,
+        uint8_t *input, uint32_t input_len, uint8_t *rdir)
 {
     /* Very simple test - if there is input, this is tftp.
      * Also check if it's starting by a zero */
@@ -304,20 +275,4 @@ void RegisterTFTPParsers(void)
     else {
         SCLogDebug("TFTP protocol parsing disabled.");
     }
-
-#ifdef UNITTESTS
-    AppLayerParserRegisterProtocolUnittests(IPPROTO_UDP, ALPROTO_TFTP,
-                                            TFTPParserRegisterTests);
-#endif
 }
-
-#ifdef UNITTESTS
-#endif
-
-void TFTPParserRegisterTests(void)
-{
-#ifdef UNITTESTS
-#endif
-}
-
-#endif /* HAVE_RUST */

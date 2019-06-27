@@ -17,8 +17,6 @@
 
 #![cfg_attr(feature = "strict", deny(warnings))]
 
-extern crate libc;
-
 #[macro_use]
 extern crate nom;
 
@@ -53,7 +51,9 @@ pub mod smb;
 pub mod krb;
 
 pub mod ikev2;
+pub mod snmp;
 
 pub mod ntp;
 pub mod tftp;
 pub mod dhcp;
+pub mod applayertemplate;

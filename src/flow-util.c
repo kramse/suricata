@@ -153,6 +153,8 @@ void FlowInit(Flow *f, const Packet *p)
     f->recursion_level = p->recursion_level;
     f->vlan_id[0] = p->vlan_id[0];
     f->vlan_id[1] = p->vlan_id[1];
+    f->vlan_idx = p->vlan_idx;
+    f->livedev = p->livedev;
 
     if (PKT_IS_IPV4(p)) {
         FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(p, &f->src);
@@ -202,3 +204,28 @@ void FlowInit(Flow *f, const Packet *p)
     SCReturn;
 }
 
+int g_bypass_info_id = -1;
+
+int GetFlowBypassInfoID(void)
+{
+    return g_bypass_info_id;
+}
+
+static void FlowBypassFree(void *x)
+{
+    FlowBypassInfo *fb = (FlowBypassInfo *) x;
+
+    if (fb == NULL)
+        return;
+
+    if (fb->bypass_data && fb->BypassFree) {
+        fb->BypassFree(fb->bypass_data);
+    }
+    SCFree(fb);
+}
+
+void RegisterFlowBypassInfo(void)
+{
+    g_bypass_info_id = FlowStorageRegister("bypass_counters", sizeof(void *),
+                                              NULL, FlowBypassFree);
+}

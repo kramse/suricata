@@ -393,6 +393,22 @@ Initialize with:
       return needs
   end
 
+TlsGetVersion
+~~~~~~~~~~~~~
+
+Get the negotiated version in a TLS session as a string through TlsGetVersion.
+
+Example:
+
+::
+
+  function log (args)
+      version = TlsGetVersion()
+      if version then
+          -- do something
+      end
+  end
+
 TlsGetCertInfo
 ~~~~~~~~~~~~~~
 
@@ -545,6 +561,37 @@ Example:
       end
   end
 
+Ja3SGetHash
+~~~~~~~~~~~
+
+Get the JA3S hash (md5sum of JA3S string) through JA3SGetHash.
+
+Example:
+
+::
+
+  function log (args)
+      hash = Ja3SGetHash()
+      if hash == nil then
+          return
+      end
+  end
+
+JA3SGetString
+~~~~~~~~~~~~~
+
+Get the JA3S string through Ja3SGetString.
+
+Example:
+
+::
+
+  function log (args)
+      str = Ja3SGetString()
+      if str == nil then
+          return
+      end
+  end
 
 SSH
 ---

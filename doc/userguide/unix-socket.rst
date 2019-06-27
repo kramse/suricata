@@ -78,6 +78,15 @@ The set of existing commands is the following:
 * memcap-set: update memcap value of an item specified
 * memcap-show: show memcap value of an item specified
 * memcap-list: list all memcap values available
+* reload-rules: alias of ruleset-reload-rules
+* register-tenant-handler: register a tenant handler with the specified mapping
+* unregister-tenant-handler: unregister a tenant handler with the specified mapping
+* register-tenant: register tenant with a particular ID and filename
+* unregister-tenant: unregister tenant with a particular ID
+* reload-tenant: reload a tenant with specified ID and filename
+* add-hostbit: add hostbit on a host IP with a particular bit name and time of expiry
+* remove-hostbit: remove hostbit on a host IP with specified bit name
+* list-hostbit: list hostbit for a particular host IP
 
 You can access to these commands with the provided example script which
 is named ``suricatasc``. A typical session with ``suricatasc`` will looks like:
@@ -127,7 +136,7 @@ Pcap processing mode
 This mode is one of main motivation behind this code. The idea is to
 be able to ask to Suricata to treat different pcap files without
 having to restart Suricata between the files. This provides you a huge
-gain in time as you don’t need to wait for the signature engine to
+gain in time as you don't need to wait for the signature engine to
 initialize.
 
 To use this mode, start suricata with your preferred YAML file and
@@ -169,7 +178,7 @@ You can add multiple files without waiting the result: they will be
 sequentially processed and the generated log/alert files will be put
 into the directory specified as second arguments of the pcap-file
 command. You need to provide absolute path to the files and directory
-as Suricata doesn’t know from where the script has been run. If you pass
+as Suricata doesn't know from where the script has been run. If you pass
 a directory instead of a file, all files in the directory will be processed. If
 using ``pcap-file-continuous`` and passing in a directory, the directory will
 be monitored for new files being added until you use ``pcap-interrupt`` or

@@ -52,8 +52,8 @@ static int RustDNSTCPParseResponse(Flow *f, void *state,
             local_data);
 }
 
-static uint16_t RustDNSTCPProbe(Flow *f, uint8_t *input, uint32_t len,
-                                uint32_t *offset)
+static uint16_t RustDNSTCPProbe(Flow *f, uint8_t direction,
+        uint8_t *input, uint32_t len, uint8_t *rdir)
 {
     SCLogDebug("RustDNSTCPProbe");
     if (len == 0 || len < sizeof(DNSHeader)) {
@@ -110,9 +110,9 @@ static int RustDNSSetTxDetectState(void *tx,
     return 0;
 }
 
-static AppLayerDecoderEvents *RustDNSGetEvents(void *state, uint64_t id)
+static AppLayerDecoderEvents *RustDNSGetEvents(void *tx)
 {
-    return rs_dns_state_get_events(state, id);
+    return rs_dns_state_get_events(tx);
 }
 
 void RegisterRustDNSTCPParsers(void)
@@ -170,6 +170,7 @@ void RegisterRustDNSTCPParsers(void)
         AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DNS,
                 rs_dns_state_progress_completion_status);
         DNSAppLayerRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_DNS);
+        DNSAppLayerRegisterGetEventInfoById(IPPROTO_TCP, ALPROTO_DNS);
 
         /* This parser accepts gaps. */
         AppLayerParserRegisterOptionFlags(IPPROTO_TCP, ALPROTO_DNS,

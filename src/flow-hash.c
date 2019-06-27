@@ -210,6 +210,70 @@ static inline uint32_t FlowGetHash(const Packet *p)
     return hash;
 }
 
+/**
+ * Basic hashing function for FlowKey
+ *
+ * \note Function only used for bypass and TCP or UDP flows
+ *
+ * \note this is only used at start to create Flow from pinned maps
+ * so fairness is not an issue
+ */
+uint32_t FlowKeyGetHash(FlowKey *fk)
+{
+    uint32_t hash = 0;
+
+    if (fk->src.family == AF_INET) {
+        FlowHashKey4 fhk;
+        int ai = (fk->src.address.address_un_data32[0] > fk->dst.address.address_un_data32[0]);
+        fhk.addrs[1-ai] = fk->src.address.address_un_data32[0];
+        fhk.addrs[ai] = fk->dst.address.address_un_data32[0];
+
+        const int pi = (fk->sp > fk->dp);
+        fhk.ports[1-pi] = fk->sp;
+        fhk.ports[pi] = fk->dp;
+
+        fhk.proto = (uint16_t)fk->proto;
+        fhk.recur = (uint16_t)fk->recursion_level;
+        fhk.vlan_id[0] = fk->vlan_id[0];
+        fhk.vlan_id[1] = fk->vlan_id[1];
+
+        hash = hashword(fhk.u32, 5, flow_config.hash_rand);
+    } else {
+        FlowHashKey6 fhk;
+        if (FlowHashRawAddressIPv6GtU32(fk->src.address.address_un_data32,
+                    fk->dst.address.address_un_data32)) {
+            fhk.src[0] = fk->src.address.address_un_data32[0];
+            fhk.src[1] = fk->src.address.address_un_data32[1];
+            fhk.src[2] = fk->src.address.address_un_data32[2];
+            fhk.src[3] = fk->src.address.address_un_data32[3];
+            fhk.dst[0] = fk->dst.address.address_un_data32[0];
+            fhk.dst[1] = fk->dst.address.address_un_data32[1];
+            fhk.dst[2] = fk->dst.address.address_un_data32[2];
+            fhk.dst[3] = fk->dst.address.address_un_data32[3];
+        } else {
+            fhk.src[0] = fk->dst.address.address_un_data32[0];
+            fhk.src[1] = fk->dst.address.address_un_data32[1];
+            fhk.src[2] = fk->dst.address.address_un_data32[2];
+            fhk.src[3] = fk->dst.address.address_un_data32[3];
+            fhk.dst[0] = fk->src.address.address_un_data32[0];
+            fhk.dst[1] = fk->src.address.address_un_data32[1];
+            fhk.dst[2] = fk->src.address.address_un_data32[2];
+            fhk.dst[3] = fk->src.address.address_un_data32[3];
+        }
+
+        const int pi = (fk->sp > fk->dp);
+        fhk.ports[1-pi] = fk->sp;
+        fhk.ports[pi] = fk->dp;
+        fhk.proto = (uint16_t)fk->proto;
+        fhk.recur = (uint16_t)fk->recursion_level;
+        fhk.vlan_id[0] = fk->vlan_id[0];
+        fhk.vlan_id[1] = fk->vlan_id[1];
+
+        hash = hashword(fhk.u32, 11, flow_config.hash_rand);
+    }
+return hash;
+}
+
 /* Since two or more flows can have the same hash key, we need to compare
  * the flow with the current flow key. */
 #define CMP_FLOW(f1,f2) \
@@ -597,6 +661,145 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
     }
 
     FlowReference(dest, f);
+
+    FBLOCK_UNLOCK(fb);
+    return f;
+}
+
+static inline int FlowCompareKey(Flow *f, FlowKey *key)
+{
+    if ((f->proto != IPPROTO_TCP) && (f->proto != IPPROTO_UDP))
+        return 0;
+    return CMP_FLOW(f, key);
+}
+
+/** \brief Get or create a Flow using a FlowKey
+ *
+ * Hash retrieval function for flows. Looks up the hash bucket containing the
+ * flow pointer. Then compares the packet with the found flow to see if it is
+ * the flow we need. If it isn't, walk the list until the right flow is found.
+ * Return a new Flow if ever no Flow was found.
+ *
+ *
+ *  \param key Pointer to FlowKey build using flow to look for
+ *  \param ttime time to use for flow creation
+ *  \param hash Value of the flow hash
+ *  \retval f *LOCKED* flow or NULL
+ */
+
+Flow *FlowGetFromFlowKey(FlowKey *key, struct timespec *ttime, const uint32_t hash)
+{
+    Flow *f = FlowGetExistingFlowFromHash(key, hash);
+
+    if (f != NULL) {
+        return f;
+    }
+
+    /* No existing flow so let's get one new */
+    f = FlowDequeue(&flow_spare_q);
+    if (f == NULL) {
+        /* now see if we can alloc a new flow */
+        f = FlowAlloc();
+        if (f == NULL) {
+            SCLogDebug("Can't get a spare flow at start");
+            return NULL;
+        }
+    }
+    f->proto = key->proto;
+    f->vlan_id[0] = key->vlan_id[0];
+    f->vlan_id[1] = key->vlan_id[1];
+    f->src.addr_data32[0] = key->src.addr_data32[0];
+    f->src.addr_data32[1] = key->src.addr_data32[1];
+    f->src.addr_data32[2] = key->src.addr_data32[2];
+    f->src.addr_data32[3] = key->src.addr_data32[3];
+    f->dst.addr_data32[0] = key->dst.addr_data32[0];
+    f->dst.addr_data32[1] = key->dst.addr_data32[1];
+    f->dst.addr_data32[2] = key->dst.addr_data32[2];
+    f->dst.addr_data32[3] = key->dst.addr_data32[3];
+    f->sp = key->sp;
+    f->dp = key->dp;
+    f->recursion_level = 0;
+    f->flow_hash = hash;
+    if (key->src.family == AF_INET) {
+        f->flags |= FLOW_IPV4;
+    } else if (key->src.family == AF_INET6) {
+        f->flags |= FLOW_IPV6;
+    }
+    FlowUpdateState(f, FLOW_STATE_CAPTURE_BYPASSED);
+
+    f->protomap = FlowGetProtoMapping(f->proto);
+    /* set timestamp to now */
+    f->startts.tv_sec = ttime->tv_sec;
+    f->startts.tv_usec = ttime->tv_nsec * 1000;
+    f->lastts = f->startts;
+
+    FlowBucket *fb = &flow_hash[hash % flow_config.hash_size];
+    FBLOCK_LOCK(fb);
+    f->fb = fb;
+    if (fb->head == NULL) {
+        fb->head = f;
+        fb->tail = f;
+    } else {
+        f->hprev = fb->tail;
+        f->hprev->hnext = f;
+        fb->tail = f;
+    }
+    FLOWLOCK_WRLOCK(f);
+    FBLOCK_UNLOCK(fb);
+
+    return f;
+}
+
+/** \brief Look for existing Flow using a FlowKey
+ *
+ * Hash retrieval function for flows. Looks up the hash bucket containing the
+ * flow pointer. Then compares the packet with the found flow to see if it is
+ * the flow we need. If it isn't, walk the list until the right flow is found.
+ *
+ *
+ *  \param key Pointer to FlowKey build using flow to look for
+ *  \param hash Value of the flow hash
+ *  \retval f *LOCKED* flow or NULL
+ */
+Flow *FlowGetExistingFlowFromHash(FlowKey *key, const uint32_t hash)
+{
+    /* get our hash bucket and lock it */
+    FlowBucket *fb = &flow_hash[hash % flow_config.hash_size];
+    FBLOCK_LOCK(fb);
+
+    SCLogDebug("fb %p fb->head %p", fb, fb->head);
+
+    /* return if the bucket don't have a flow */
+    if (fb->head == NULL) {
+        FBLOCK_UNLOCK(fb);
+        return NULL;
+    }
+
+    /* ok, we have a flow in the bucket. Let's find out if it is our flow */
+    Flow *f = fb->head;
+
+    /* see if this is the flow we are looking for */
+    if (FlowCompareKey(f, key) == 0) {
+        while (f) {
+            f = f->hnext;
+
+            if (f == NULL) {
+                FBLOCK_UNLOCK(fb);
+                return NULL;
+            }
+
+            if (FlowCompareKey(f, key) != 0) {
+                /* found our flow, lock & return */
+                FLOWLOCK_WRLOCK(f);
+
+                FBLOCK_UNLOCK(fb);
+                return f;
+            }
+        }
+    }
+
+    /* lock & return */
+    FLOWLOCK_WRLOCK(f);
 
     FBLOCK_UNLOCK(fb);
     return f;

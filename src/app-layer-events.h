@@ -38,6 +38,8 @@ struct AppLayerDecoderEvents_ {
     uint8_t cnt;
     /* current event buffer size */
     uint8_t events_buffer_size;
+    /* last logged */
+    uint8_t event_last_logged;
 };
 
 /* app layer pkt level events */
@@ -58,6 +60,8 @@ typedef enum AppLayerEventType_ {
 
 int AppLayerGetPktEventInfo(const char *event_name, int *event_id);
 
+int AppLayerGetEventInfoById(int event_id, const char **event_name,
+                             AppLayerEventType *event_type);
 void AppLayerDecoderEventsSetEventRaw(AppLayerDecoderEvents **sevents, uint8_t event);
 void AppLayerDecoderEventsSetEvent(Flow *f, uint8_t event);
 

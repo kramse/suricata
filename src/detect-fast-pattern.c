@@ -64,7 +64,7 @@ int FastPatternSupportEnabledForSigMatchList(const DetectEngineCtx *de_ctx,
     if (sm_fp_support_smlist_list == NULL)
         return 0;
 
-    if (list_id == DETECT_SM_LIST_PMATCH)
+    if (list_id == DETECT_SM_LIST_PMATCH || list_id == DETECT_SM_LIST_L4HDR)
         return 1;
 
     return DetectBufferTypeSupportsMpmGetById(de_ctx, list_id);
@@ -162,7 +162,7 @@ void DetectFastPatternRegister(void)
 {
     sigmatch_table[DETECT_FAST_PATTERN].name = "fast_pattern";
     sigmatch_table[DETECT_FAST_PATTERN].desc = "force using preceding content in the multi pattern matcher";
-    sigmatch_table[DETECT_FAST_PATTERN].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#fast-pattern";
+    sigmatch_table[DETECT_FAST_PATTERN].url = DOC_URL DOC_VERSION "/rules/prefilter-keywords.html#fast-pattern";
     sigmatch_table[DETECT_FAST_PATTERN].Match = NULL;
     sigmatch_table[DETECT_FAST_PATTERN].Setup = DetectFastPatternSetup;
     sigmatch_table[DETECT_FAST_PATTERN].Free  = NULL;

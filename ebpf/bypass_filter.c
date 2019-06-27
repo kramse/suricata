@@ -27,33 +27,39 @@
 
 #include "bpf_helpers.h"
 
+/* vlan tracking: set it to 0 if you don't use VLAN for flow tracking */
+#define VLAN_TRACKING    1
+
 #define LINUX_VERSION_CODE 263682
 
 struct flowv4_keys {
-    __be32 src;
-    __be32 dst;
+    __u32 src;
+    __u32 dst;
     union {
-        __be32 ports;
-        __be16 port16[2];
+        __u32 ports;
+        __u16 port16[2];
     };
-    __u32 ip_proto;
-} __attribute__((__aligned__(8)));
+    __u8 ip_proto:1;
+    __u16 vlan0:15;
+    __u16 vlan1;
+};
 
 struct flowv6_keys {
-    __be32 src[4];
-    __be32 dst[4];
+    __u32 src[4];
+    __u32 dst[4];
     union {
-        __be32 ports;
-        __be16 port16[2];
+        __u32 ports;
+        __u16 port16[2];
     };
-    __u32 ip_proto;
-} __attribute__((__aligned__(8)));
+    __u8 ip_proto:1;
+    __u16 vlan0:15;
+    __u16 vlan1;
+};
 
 struct pair {
-    __u64 time;
     __u64 packets;
     __u64 bytes;
-} __attribute__((__aligned__(8)));
+};
 
 struct bpf_map_def SEC("maps") flow_table_v4 = {
     .type = BPF_MAP_TYPE_PERCPU_HASH,
@@ -69,25 +75,34 @@ struct bpf_map_def SEC("maps") flow_table_v6 = {
     .max_entries = 32768,
 };
 
+struct vlan_hdr {
+    __u16	h_vlan_TCI;
+    __u16	h_vlan_encapsulated_proto;
+};
+
 /**
  * IPv4 filter
  *
  * \return 0 to drop packet out and -1 to accept it
  */
-static __always_inline int ipv4_filter(struct __sk_buff *skb)
+static __always_inline int ipv4_filter(struct __sk_buff *skb, __u16 vlan0, __u16 vlan1)
 {
     __u32 nhoff, verlen;
     struct flowv4_keys tuple;
     struct pair *value;
     __u16 port;
+    __u8 ip_proto;
 
     nhoff = skb->cb[0];
 
-    tuple.ip_proto = load_byte(skb, nhoff + offsetof(struct iphdr, protocol));
+    ip_proto = load_byte(skb, nhoff + offsetof(struct iphdr, protocol));
     /* only support TCP and UDP for now */
-    switch (tuple.ip_proto) {
+    switch (ip_proto) {
         case IPPROTO_TCP:
+            tuple.ip_proto = 1;
+            break;
         case IPPROTO_UDP:
+            tuple.ip_proto = 0;
             break;
         default:
             return -1;
@@ -102,6 +117,8 @@ static __always_inline int ipv4_filter(struct __sk_buff *skb)
     port = tuple.port16[1];
     tuple.port16[1] = tuple.port16[0];
     tuple.port16[0] = port;
+    tuple.vlan0 = vlan0;
+    tuple.vlan1 = vlan1;
 
 #if 0
     if ((tuple.port16[0] == 22) || (tuple.port16[1] == 22))
@@ -125,7 +142,6 @@ static __always_inline int ipv4_filter(struct __sk_buff *skb)
 #endif
         value->packets++;
         value->bytes += skb->len;
-        value->time = bpf_ktime_get_ns();
         return 0;
     }
     return -1;
@@ -136,7 +152,7 @@ static __always_inline int ipv4_filter(struct __sk_buff *skb)
  *
  * \return 0 to drop packet out and -1 to accept it
  */
-static __always_inline int ipv6_filter(struct __sk_buff *skb)
+static __always_inline int ipv6_filter(struct __sk_buff *skb, __u16 vlan0, __u16 vlan1)
 {
     __u32 nhoff;
     __u8 nhdr;
@@ -152,7 +168,10 @@ static __always_inline int ipv6_filter(struct __sk_buff *skb)
     /* only support direct TCP and UDP for now */
     switch (nhdr) {
         case IPPROTO_TCP:
+            tuple.ip_proto = 1;
+            break;
         case IPPROTO_UDP:
+            tuple.ip_proto = 0;
             break;
         default:
             return -1;
@@ -172,7 +191,9 @@ static __always_inline int ipv6_filter(struct __sk_buff *skb)
     port = tuple.port16[1];
     tuple.port16[1] = tuple.port16[0];
     tuple.port16[0] = port;
-    tuple.ip_proto = nhdr;
+
+    tuple.vlan0 = vlan0;
+    tuple.vlan1 = vlan1;
 
     //char fmt[] = "Now Got IPv6 port %u and %u\n";
     //bpf_trace_printk(fmt, sizeof(fmt), tuple.port16[0], tuple.port16[1]);
@@ -183,7 +204,6 @@ static __always_inline int ipv6_filter(struct __sk_buff *skb)
         //bpf_trace_printk(fmt, sizeof(fmt), tuple.port16[0], tuple.port16[1]);
         value->packets++;
         value->bytes += skb->len;
-        value->time = bpf_ktime_get_ns();
         return 0;
     }
     return -1;
@@ -198,14 +218,29 @@ static __always_inline int ipv6_filter(struct __sk_buff *skb)
  * \return 0 to drop packet out and -1 to accept it
  */
 int SEC("filter") hashfilter(struct __sk_buff *skb) {
-    __u32 nhoff = BPF_LL_OFF + ETH_HLEN;
+    __u32 nhoff = ETH_HLEN;
+
+    __u16 proto = load_half(skb, offsetof(struct ethhdr, h_proto));
+    __u16 vlan0 = skb->vlan_tci & 0x0fff;
+    __u16 vlan1 = 0;
+
+    if (proto == ETH_P_8021AD || proto == ETH_P_8021Q) {
+        proto = load_half(skb, nhoff + offsetof(struct vlan_hdr,
+                          h_vlan_encapsulated_proto));
+#if VLAN_TRACKING
+        /* one vlan layer is stripped by OS so get vlan 1 at first pass */
+        vlan1 = load_half(skb, nhoff + offsetof(struct vlan_hdr,
+                          h_vlan_TCI)) & 0x0fff;
+#endif
+        nhoff += sizeof(struct vlan_hdr);
+    }
 
     skb->cb[0] = nhoff;
-    switch (skb->protocol) {
-        case __constant_htons(ETH_P_IP):
-            return ipv4_filter(skb);
-        case __constant_htons(ETH_P_IPV6):
-            return ipv6_filter(skb);
+    switch (proto) {
+        case ETH_P_IP:
+            return ipv4_filter(skb, vlan0, vlan1);
+        case ETH_P_IPV6:
+            return ipv6_filter(skb, vlan0, vlan1);
         default:
 #if 0
             {

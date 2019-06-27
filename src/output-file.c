@@ -124,7 +124,7 @@ static void OutputFileLogFfc(ThreadVars *tv,
                 const OutputFileLogger *logger = list;
                 const OutputLoggerThreadStore *store = op_thread_data->store;
                 while (logger && store) {
-                    BUG_ON(logger->LogFunc == NULL);
+                    DEBUG_VALIDATE_BUG_ON(logger->LogFunc == NULL);
 
                     SCLogDebug("logger %p", logger);
                     PACKET_PROFILING_LOGGER_START(p, logger->logger_id);
@@ -135,8 +135,8 @@ static void OutputFileLogFfc(ThreadVars *tv,
                     logger = logger->next;
                     store = store->next;
 
-                    BUG_ON(logger == NULL && store != NULL);
-                    BUG_ON(logger != NULL && store == NULL);
+                    DEBUG_VALIDATE_BUG_ON(logger == NULL && store != NULL);
+                    DEBUG_VALIDATE_BUG_ON(logger != NULL && store == NULL);
                 }
 
                 if (file_logged) {
@@ -144,8 +144,6 @@ static void OutputFileLogFfc(ThreadVars *tv,
                 }
             }
         }
-
-        FilePrune(ffc);
     }
 }
 
@@ -179,6 +177,11 @@ static TmEcode OutputFileLog(ThreadVars *tv, Packet *p, void *thread_data)
 
     OutputFileLogFfc(tv, op_thread_data, p, ffc_ts, file_close_ts, file_trunc, STREAM_TOSERVER);
     OutputFileLogFfc(tv, op_thread_data, p, ffc_tc, file_close_tc, file_trunc, STREAM_TOCLIENT);
+
+    if (ffc_ts && (p->flowflags & FLOW_PKT_TOSERVER))
+        FilePrune(ffc_ts);
+    if (ffc_tc && (p->flowflags & FLOW_PKT_TOCLIENT))
+        FilePrune(ffc_tc);
 
     return TM_ECODE_OK;
 }

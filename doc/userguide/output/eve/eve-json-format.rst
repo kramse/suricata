@@ -109,6 +109,122 @@ the signature.
        "port": 80
      },
 
+Event type: Anomaly
+-------------------
+
+Events with type "anomaly" report unexpected conditions such as truncated packets, packets
+with invalid values, events that render the packet invalid for further processing or unexpected
+behaviors.
+
+Networks which experience high occurrences of anomalies may experience packet processing degradation
+when anomaly logging is enabled.
+
+Fields
+------
+
+* "type": Either "packet", "stream" or "applayer". In rare cases, type will be "unknown".
+  When this occurs, an additional field named "code" will be present. Events with type
+  "applayer" are detected by the application layer parsers.
+* "event" The name of the anomalous event. Events of type "packet" are prefixed
+  with "decoder"; events of type "stream" are prefixed with "stream".
+* "code" If "type" is "unknown", than "code" contains the unrecognized event code. Otherwise,
+  this field is not present.
+
+The following fields are included when "type" has the value "applayer":
+
+* "layer"  Indicates the handling layer that detected the event. This will be "proto_parser"
+  (protocol parser), "proto_detect" (protocol detection) or "parser."
+* "event_no" This is an informational only field indicating the total number of events
+  detected and the ordinal number of the event being reported. It is presented as "N (of M)"
+  where "N" is the ordinal number of the event and "M" is the total number of events detected.
+
+When ``packethdr`` is enabled, the first 32 bytes of the packet are included as a byte64-encoded blob in the main part of
+record. This applies to events of "type" "packet" or "stream" only.
+
+Examples
+--------
+
+::
+
+	"anomaly": {
+	  "type": "packet",
+	  "event": "decoder.udp.pkt_too_small"
+	}
+
+	{
+	  "timestamp": "2016-01-17T13:26:30.841742-0800",
+	  "flow_id": 1848021463489450,
+	  "pcap_cnt": 1393890,
+	  "event_type": "anomaly",
+	  "src_ip": "192.168.81.128",
+	  "src_port": 50105,
+	  "dest_ip": "31.148.99.125",
+	  "dest_port": 80,
+	  "proto": "TCP",
+	  "anomaly": {
+		"type": "stream",
+		"event": "stream.reassembly_seq_gap"
+	  }
+	}
+
+	{
+	  "timestamp": "1969-12-31T16:04:21.000000-0800",
+	  "pcap_cnt": 9262,
+	  "event_type": "anomaly",
+	  "src_ip": "208.21.2.184",
+	  "src_port": 0,
+	  "dest_ip": "10.1.1.99",
+	  "dest_port": 0,
+	  "proto": "UDP",
+	  "packet": "////////AQEBAQEBCABFAAA8xZ5AAP8R1+DQFQK4CgE=",
+	  "packet_info": {
+		"linktype": 1
+	  },
+	  "anomaly": {
+		"type": "packet",
+		"event": "decoder.udp.pkt_too_small"
+	  }
+	}
+
+	{
+	  "timestamp": "2016-01-11T05:10:54.612110-0800",
+	  "flow_id": 412547343494194,
+	  "pcap_cnt": 1391293,
+	  "event_type": "anomaly",
+	  "src_ip": "192.168.122.149",
+	  "src_port": 49324,
+	  "dest_ip": "69.195.71.174",
+	  "dest_port": 443,
+	  "proto": "TCP",
+	  "app_proto": "tls",
+	  "anomaly": {
+		"type": "applayer",
+		"event": "APPLAYER_DETECT_PROTOCOL_ONLY_ONE_DIRECTION",
+		"event_no": "1 (of 1)",
+		"layer": "proto_detect"
+	  }
+	}
+
+	{
+	  "timestamp": "2016-01-11T05:10:52.828802-0800",
+	  "flow_id": 201217772575257,
+	  "pcap_cnt": 1391281,
+	  "event_type": "anomaly",
+	  "src_ip": "192.168.122.149",
+	  "src_port": 49323,
+	  "dest_ip": "69.195.71.174",
+	  "dest_port": 443,
+	  "proto": "TCP",
+	  "tx_id": 0,
+	  "app_proto": "tls",
+	  "anomaly": {
+		"type": "applayer",
+		"event": "INVALID_RECORD_TYPE",
+		"event_no": "1 (of 3)",
+		"layer": "proto_parser"
+	  }
+	}
+
 Event type: HTTP
 ----------------
 
@@ -127,7 +243,7 @@ In addition to these fields, if the extended logging is enabled in the suricata.
 * "status": HTTP status code
 * "protocol": Protocol / Version of HTTP (ex: HTTP/1.1)
 * "http_method": The HTTP method (ex: GET, POST, HEAD)
-* "http_refer": The referer for this action
+* "http_refer": The referrer for this action
 
 In addition to the extended logging fields one can also choose to enable/add from more than 50 additional custom logging HTTP fields enabled in the suricata.yaml file. The additional fields can be enabled as following:
 
@@ -165,6 +281,10 @@ In addition to the extended logging fields one can also choose to enable/add fro
 
 The benefits here of using the extended logging is to see if this action for example was a POST or perhaps if a download of an executable actually returned any bytes.
 
+It is also possible to dump every header for HTTP requests/responses or both via the keyword ``dump-all-headers``.
+
+
+
 Examples
 ~~~~~~~~
 
@@ -179,6 +299,21 @@ Event with non-extended logging:
       "http_user_agent": "<User-Agent>",
       "http_content_type": "application\/x-gzip"
   }
+
+In case the hostname shows a port number, such as in case there is a header "Host: www.test.org:1337":
+
+::
+
+
+  "http": {
+      "http_port": 1337,
+      "hostname": "www.test.org",
+      "url" :"\/this\/is\/test.tar.gz",
+      "http_user_agent": "<User-Agent>",
+      "http_content_type": "application\/x-gzip"
+  }
+
+
 
 Event with extended logging:
 
@@ -196,6 +331,39 @@ Event with extended logging:
       "status":"200",
       "length":310
   }
+
+Event with ``dump-all-headers`` set to "both":
+
+::
+
+  "http": {
+      "hostname": "test.co.uk",
+      "url":"\/test\/file.json",
+      "http_user_agent": "<User-Agent>",
+      "http_content_type": "application\/json",
+      "http_refer": "http:\/\/www.test.com\/",
+      "http_method": "GET",
+      "protocol": "HTTP\/1.1",
+      "status":"200",
+      "length":310,
+      "request_headers": [
+          {
+              "name": "User-Agent",
+              "value": "Wget/1.13.4 (linux-gnu)"
+          },
+          {
+              "name": "Accept",
+              "value": "*/*"
+          },
+      ],
+      "response_headers": [
+          {
+              "name": "Date",
+              "value": "Wed, 25 Mar 2015 15:40:41 GMT"
+          },
+      ]
+  }
+
 
 Event type: DNS
 ---------------
@@ -384,6 +552,7 @@ If extended logging is enabled the following fields are also included:
 * "not_before": The NotBefore field from the TLS certificate
 * "not_after": The NotAfter field from the TLS certificate
 * "ja3": The JA3 fingerprint consisting of both a JA3 hash and a JA3 string
+* "ja3s": The JA3S fingerprint consisting of both a JA3 hash and a JA3 string
 
 JA3 must be enabled in the Suricata config file (set 'app-layer.protocols.tls.ja3-fingerprints' to 'yes').
 
@@ -725,4 +894,73 @@ Example::
         "DC1.contoso.local"
       ]
     }
+  }
+
+
+Event type: SSH
+----------------
+
+Fields
+~~~~~~
+
+* "proto_version": The protocol version transported with the ssh protocol (1.x, 2.x)
+* "software_version": The software version used by end user
+
+Example of SSH logging:
+
+::
+
+  "ssh": {
+    "client": {
+        "proto_version": "2.0",
+        "software_version": "OpenSSH_6.7",
+     },
+    "server": {
+        "proto_version": "2.0",
+        "software_version": "OpenSSH_6.7",
+     }
+  }
+
+Event type: Flow
+----------------
+
+Fields
+~~~~~~
+
+* "pkts_toserver": total number of packets to server, include bypassed packets
+* "pkts_toclient": total number of packets to client
+* "bytes_toserver": total bytes count to server
+* "bytes_toclient": total bytes count to client
+* "bypassed.pkts_toserver": number of bypassed packets to server
+* "bypassed.pkts_toclient": number of bypassed packets to client
+* "bypassed.bytes_toserver": bypassed bytes count to server
+* "bypassed.bytes_toclient": bypassed bytes count to client
+* "start": date of start of the flow
+* "end": date of end of flow (last seen packet)
+* "age": duration of the flow
+* "bypass": if the flow has been bypassed, it is set to "local" (internal bypass) or "capture"
+* "state": display state of the flow (include "new", "established", "closed", "bypassed")
+* "reason": mechanism that did trigger the end of the flow (include "timeout", "forced" and "shutdown")
+* "alerted": "true" or "false" depending if an alert has been seen on flow
+
+Example ::
+
+  "flow": {
+    "pkts_toserver": 23,
+    "pkts_toclient": 21,
+    "bytes_toserver": 4884,
+    "bytes_toclient": 7392,
+    "bypassed": {
+      "pkts_toserver": 10,
+      "pkts_toclient": 8,
+      "bytes_toserver": 1305,
+      "bytes_toclient": 984
+    },
+    "start": "2019-05-28T23:32:29.025256+0200",
+    "end": "2019-05-28T23:35:28.071281+0200",
+    "age": 179,
+    "bypass": "capture",
+    "state": "bypassed",
+    "reason": "timeout",
+    "alerted": false
   }

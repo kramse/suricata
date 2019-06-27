@@ -28,7 +28,6 @@
  * The tracker does continue to follow the file.
  */
 
-extern crate libc;
 use log::*;
 use core::*;
 use std::collections::HashMap;
@@ -136,8 +135,10 @@ impl FileTransferTracker {
             name: &[u8], data: &[u8], chunk_offset: u64, chunk_size: u32,
             fill_bytes: u8, is_last: bool, xid: &u32) -> u32
     {
-        if self.chunk_left != 0 { panic!("complete existing chunk first"); }
-        if self.fill_bytes != 0 { panic!("complete existing fill bytes first"); }
+        if self.chunk_left != 0 || self.fill_bytes != 0 {
+            SCLogDebug!("current chunk incomplete: truncating");
+            self.trunc(files, flags);
+        }
 
         SCLogDebug!("NEW CHUNK: chunk_size {} fill_bytes {}", chunk_size, fill_bytes);
 

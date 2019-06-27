@@ -27,6 +27,7 @@
 #include "decode.h"
 #include "util-var.h"
 #include "util-atomic.h"
+#include "util-device.h"
 #include "detect-tag.h"
 #include "util-optimize.h"
 
@@ -42,9 +43,9 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 
 /* per flow flags */
 
-/** At least on packet from the source address was seen */
+/** At least one packet from the source address was seen */
 #define FLOW_TO_SRC_SEEN                BIT_U32(0)
-/** At least on packet from the destination address was seen */
+/** At least one packet from the destination address was seen */
 #define FLOW_TO_DST_SEEN                BIT_U32(1)
 /** Don't return this from the flow hash. It has been replaced. */
 #define FLOW_TCP_REUSED                 BIT_U32(2)
@@ -100,6 +101,10 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 /** Indicate that alproto detection for flow should be done again */
 #define FLOW_CHANGE_PROTO               BIT_U32(24)
 
+#define FLOW_WRONG_THREAD               BIT_U32(25)
+/** Protocol detection told us flow is picked up in wrong direction (midstream) */
+#define FLOW_DIR_REVERSED               BIT_U32(26)
+
 /* File flags */
 
 /** no magic on files in this flow */
@@ -130,6 +135,11 @@ typedef struct AppLayerParserState_ AppLayerParserState;
     (((f)->flags & FLOW_IPV4) == FLOW_IPV4)
 #define FLOW_IS_IPV6(f) \
     (((f)->flags & FLOW_IPV6) == FLOW_IPV6)
+
+#define FLOW_GET_SP(f)  \
+    ((f)->flags & FLOW_DIR_REVERSED) ? (f)->dp : (f)->sp;
+#define FLOW_GET_DP(f)  \
+    ((f)->flags & FLOW_DIR_REVERSED) ? (f)->sp : (f)->dp;
 
 #define FLOW_COPY_IPV4_ADDR_TO_PACKET(fa, pa) do {      \
         (pa)->family = AF_INET;                         \
@@ -272,7 +282,7 @@ typedef struct FlowKey_
     Port sp, dp;
     uint8_t proto;
     uint8_t recursion_level;
-
+    uint16_t vlan_id[2];
 } FlowKey;
 
 typedef struct FlowAddress_ {
@@ -287,19 +297,9 @@ typedef struct FlowAddress_ {
 #define addr_data16 address.address_un_data16
 #define addr_data8  address.address_un_data8
 
-#ifdef __tile__
-/* Atomic Ints performance better on Tile. */
-typedef unsigned int FlowRefCount;
-#else
 typedef unsigned short FlowRefCount;
-#endif
 
-#ifdef __tile__
-/* Atomic Ints performance better on Tile. */
-typedef unsigned int FlowStateType;
-#else
 typedef unsigned short FlowStateType;
-#endif
 
 /** Local Thread ID */
 typedef uint16_t FlowThreadId;
@@ -344,6 +344,10 @@ typedef struct Flow_
     uint8_t proto;
     uint8_t recursion_level;
     uint16_t vlan_id[2];
+    uint8_t vlan_idx;
+
+    /** Incoming interface */
+    struct LiveDevice_ *livedev;
 
     /** flow hash - the flow hash before hash table size mod. */
     uint32_t flow_hash;
@@ -374,15 +378,15 @@ typedef struct Flow_
 
     uint32_t flags;         /**< generic flags */
 
-    /* Parent flow id for protocol like ftp */
-    int64_t parent_id;
-
     uint16_t file_flags;    /**< file tracking/extraction flags */
     /* coccinelle: Flow:file_flags:FLOWFILE_ */
 
     /** destination port to be used in protocol detection. This is meant
      *  for use with STARTTLS and HTTP CONNECT detection */
     uint16_t protodetect_dp; /**< 0 if not used */
+
+    /* Parent flow id for protocol like ftp */
+    int64_t parent_id;
 
 #ifdef FLOWLOCK_RWLOCK
     SCRWLock r;
@@ -478,6 +482,16 @@ typedef struct FlowProtoFreeFunc_ {
     void (*Freefunc)(void *);
 } FlowProtoFreeFunc;
 
+typedef struct FlowBypassInfo_ {
+    bool (* BypassUpdate)(Flow *f, void *data, time_t tsec);
+    void (* BypassFree)(void *data);
+    void *bypass_data;
+    uint64_t tosrcpktcnt;
+    uint64_t tosrcbytecnt;
+    uint64_t todstpktcnt;
+    uint64_t todstbytecnt;
+} FlowBypassInfo;
+
 /** \brief prepare packet for a life with flow
  *  Set PKT_WANTS_FLOW flag to incidate workers should do a flow lookup
  *  and calc the hash value to be used in the lookup and autofp flow
@@ -493,6 +507,7 @@ int FlowHasAlerts(const Flow *);
 void FlowSetChangeProtoFlag(Flow *);
 void FlowUnsetChangeProtoFlag(Flow *);
 int FlowChangeProto(Flow *);
+void FlowSwap(Flow *);
 
 void FlowRegisterTests (void);
 int FlowSetProtoTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
@@ -516,6 +531,9 @@ void FlowUpdateState(Flow *f, enum FlowState s);
 int FlowSetMemcap(uint64_t size);
 uint64_t FlowGetMemcap(void);
 uint64_t FlowGetMemuse(void);
+
+int GetFlowBypassInfoID(void);
+void RegisterFlowBypassInfo(void);
 
 /** ----- Inline functions ----- */
 
@@ -623,4 +641,3 @@ uint8_t FlowGetDisruptionFlags(const Flow *f, uint8_t flags);
 void FlowHandlePacketUpdate(Flow *f, Packet *p);
 
 #endif /* __FLOW_H__ */
-

@@ -151,8 +151,8 @@ The syntax of geoip::
 So, you can see you can use the following to make clear on which
 direction you would like to match::
 
-  both: both directions have to match with the given geoip (geopip’s)
-  any: one of the directions have to match with the given geoip (’s).
+  both: both directions have to match with the given geoip (geopip's)
+  any: one of the directions have to match with the given geoip ('s).
   dest: if the destination matches with the given geoip.
   src: the source matches with the given geoip.
 
@@ -220,6 +220,32 @@ Example of fragoffset in a rule:
 .. container:: example-rule
 
    alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"ET EXPLOIT Invalid non-fragmented packet with fragment offset>0"; fragbits: M; :example-rule-emphasis:`fragoffset: >0;` reference:url,doc.emergingthreats.net/bin/view/Main/2001022; classtype:bad-unknown; sid:2001022; rev:5; metadata:created_at 2010_07_30, updated_at 2010_07_30;)
+
+tos
+^^^
+
+The tos keyword can match on specific decimal values of the IP header TOS
+field. The tos keyword can be have a value from 0 - 255. This field of the
+IP header has been updated by `rfc2474 <https://tools.ietf.org/html/rfc2474>`_
+to include functionality for
+`Differentiated services <https://en.wikipedia.org/wiki/Differentiated_services>`_.
+
+Format of tos::
+
+  tos:[!]<number>;
+
+Example of tos in a rule:
+
+.. container:: example-rule
+
+    alert ip any any -> any any (msg:"Differentiated Services Codepoint: Class Selector 1 (8)"; flow:established; :example-rule-emphasis:`tos:8;` classtype:not-suspicious; sid:2600115; rev:1;)
+
+Example of tos with negated values:
+
+.. container:: example-rule
+
+    alert ip any any -> any any (msg:"TGI HUNT non-DiffServ aware TOS setting"; flow:established,to_server; :example-rule-emphasis:`tos:!0; tos:!8; tos:!16; tos:!24; tos:!32; tos:!40; tos:!48; tos:!56;` threshold:type limit, track by_src, seconds 60, count 1; classtype:bad-unknown; sid:2600124; rev:1;)
+
 
 TCP keywords
 ------------
@@ -301,6 +327,60 @@ Example of window in a rule:
 .. container:: example-rule
 
     alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"GPL DELETED typot trojan traffic"; flow:stateless; flags:S,12; :example-rule-emphasis:`window:55808;` reference:mcafee,100406; classtype:trojan-activity; sid:2182; rev:8;)
+
+tcp.mss
+^^^^^^^
+
+Match on the TCP MSS option value. Will not match if the option is not
+present.
+
+The format of the keyword::
+
+  tcp.mss:<min>-<max>;
+  tcp.mss:[<|>]<number>;
+  tcp.mss:<value>;
+
+Example rule:
+
+.. container:: example-rule
+
+    alert tcp $EXTERNAL_NET any -> $HOME_NET any (flow:stateless; flags:S,12; :example-rule-emphasis:`tcp.mss:<536;` sid:1234; rev:5;)
+
+tcp.hdr
+^^^^^^^
+
+Sticky buffer to match on the whole TCP header.
+
+Example rule:
+
+.. container:: example-rule
+
+    alert tcp $EXTERNAL_NET any -> $HOME_NET any (flags:S,12; :example-rule-emphasis:`tcp.hdr; content:"|02 04|"; offset:20; byte_test:2,<,536,0,big,relative;` sid:1234; rev:5;)
+
+This example starts looking after the fixed portion of the header, so
+into the variable sized options. There it will look for the MSS option
+(type 2, option len 4) and using a byte_test determine if the value of
+the option is lower than 536. The `tcp.mss` option will be more efficient,
+so this keyword is meant to be used in cases where no specific keyword
+is available.
+
+UDP keywords
+------------
+
+udp.hdr
+^^^^^^^
+
+Sticky buffer to match on the whole UDP header.
+
+Example rule:
+
+.. container:: example-rule
+
+    alert udp any any -> any any (:example-rule-emphasis:`udp.hdr; content:"|00 08|"; offset:4; depth:2;` sid:1234; rev:5;)
+
+This example matches on the length field of the UDP header. In this
+case the length of 8 means that there is no payload. This can also
+be matched using `dsize:0;`.
 
 ICMP keywords
 -------------

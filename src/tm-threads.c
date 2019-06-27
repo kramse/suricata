@@ -70,21 +70,6 @@ __thread uint64_t rwr_lock_cnt;
 #define cpu_set_t cpuset_t
 #endif /* OS_FREEBSD */
 
-#ifdef OS_WIN32
-static inline void SleepUsec(uint64_t usec)
-{
-    uint64_t msec = 1;
-    if (usec > 1000) {
-        msec = usec / 1000;
-    }
-    Sleep(msec);
-}
-#define SleepMsec(msec) Sleep((msec))
-#else
-#define SleepUsec(usec) usleep((usec))
-#define SleepMsec(msec) usleep((msec) * 1000)
-#endif
-
 /* prototypes */
 static int SetCPUAffinity(uint16_t cpu);
 
@@ -200,42 +185,44 @@ TmEcode TmThreadsSlotVarRun(ThreadVars *tv, Packet *p,
  */
 static int TmThreadTimeoutLoop(ThreadVars *tv, TmSlot *s)
 {
-    TmSlot *stream_slot = NULL, *slot = NULL;
-    int run = 1;
+    TmSlot *fw_slot = NULL;
     int r = TM_ECODE_OK;
 
-    for (slot = s; slot != NULL; slot = slot->slot_next) {
-        if (slot->tm_id == TMM_FLOWWORKER)
-        {
-            stream_slot = slot;
+    for (TmSlot *slot = s; slot != NULL; slot = slot->slot_next) {
+        if (slot->tm_id == TMM_FLOWWORKER) {
+            fw_slot = slot;
             break;
         }
     }
 
-    if (tv->stream_pq == NULL || stream_slot == NULL) {
-        SCLogDebug("not running TmThreadTimeoutLoop %p/%p", tv->stream_pq, stream_slot);
+    if (tv->stream_pq == NULL || fw_slot == NULL) {
+        SCLogDebug("not running TmThreadTimeoutLoop %p/%p", tv->stream_pq, fw_slot);
         return r;
     }
 
     SCLogDebug("flow end loop starting");
-    while(run) {
-        Packet *p;
-        if (tv->stream_pq->len != 0) {
-            SCMutexLock(&tv->stream_pq->mutex_q);
-            p = PacketDequeue(tv->stream_pq);
-            SCMutexUnlock(&tv->stream_pq->mutex_q);
-            BUG_ON(p == NULL);
-
-            if ((r = TmThreadsSlotProcessPkt(tv, stream_slot, p) != TM_ECODE_OK)) {
-                if (r == TM_ECODE_FAILED)
-                    run = 0;
+    while (1) {
+        SCMutexLock(&tv->stream_pq->mutex_q);
+        uint32_t len = tv->stream_pq->len;
+        SCMutexUnlock(&tv->stream_pq->mutex_q);
+        if (len > 0) {
+            while (len--) {
+                SCMutexLock(&tv->stream_pq->mutex_q);
+                Packet *p = PacketDequeue(tv->stream_pq);
+                SCMutexUnlock(&tv->stream_pq->mutex_q);
+                if (likely(p)) {
+                    if ((r = TmThreadsSlotProcessPkt(tv, fw_slot, p) != TM_ECODE_OK)) {
+                        if (r == TM_ECODE_FAILED)
+                            break;
+                    }
+                }
             }
         } else {
             SleepUsec(1);
         }
 
         if (tv->stream_pq->len == 0 && TmThreadsCheckFlag(tv, THV_KILL)) {
-            run = 0;
+            break;
         }
     }
     SCLogDebug("flow end loop complete");
@@ -798,14 +785,9 @@ error:
 
 ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *tm_slot)
 {
-    ThreadVars *tv;
-    int i;
-
     SCMutexLock(&tv_root_lock);
-
-    for (i = 0; i < TVT_MAX; i++) {
-        tv = tv_root[i];
-
+    for (int i = 0; i < TVT_MAX; i++) {
+        ThreadVars *tv = tv_root[i];
         while (tv) {
             TmSlot *slots = tv->tm_slots;
             while (slots != NULL) {
@@ -818,9 +800,7 @@ ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *tm_slot)
             tv = tv->next;
         }
     }
-
     SCMutexUnlock(&tv_root_lock);
-
     return NULL;
 }
 
@@ -884,16 +864,11 @@ void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, const void *data)
  */
 TmSlot *TmSlotGetSlotForTM(int tm_id)
 {
-    ThreadVars *tv = NULL;
-    TmSlot *slots;
-    int i;
-
     SCMutexLock(&tv_root_lock);
-
-    for (i = 0; i < TVT_MAX; i++) {
-        tv = tv_root[i];
+    for (int i = 0; i < TVT_MAX; i++) {
+        ThreadVars *tv = tv_root[i];
         while (tv) {
-            slots = tv->tm_slots;
+            TmSlot *slots = tv->tm_slots;
             while (slots != NULL) {
                 if (slots->tm_id == tm_id) {
                     SCMutexUnlock(&tv_root_lock);
@@ -904,9 +879,7 @@ TmSlot *TmSlotGetSlotForTM(int tm_id)
             tv = tv->next;
         }
     }
-
     SCMutexUnlock(&tv_root_lock);
-
     return NULL;
 }
 

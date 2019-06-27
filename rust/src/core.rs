@@ -17,8 +17,7 @@
 
 // This file exposes items from the core "C" code to Rust.
 
-extern crate libc;
-
+use std;
 use filecontainer::*;
 
 /// Opaque C types.
@@ -27,7 +26,7 @@ pub enum DetectEngineState {}
 pub enum AppLayerDecoderEvents {}
 
 // From app-layer-events.h
-pub type AppLayerEventType = libc::c_int;
+pub type AppLayerEventType = std::os::raw::c_int;
 pub const APP_LAYER_EVENT_TYPE_TRANSACTION : i32 = 1;
 pub const APP_LAYER_EVENT_TYPE_PACKET      : i32 = 2;
 
@@ -41,10 +40,13 @@ pub const STREAM_DEPTH:    u8 = 0x20;
 pub const STREAM_MIDSTREAM:u8 = 0x40;
 
 // Application layer protocol identifiers (app-layer-protos.h)
-pub type AppProto = libc::c_int;
+pub type AppProto = std::os::raw::c_int;
 
 pub const ALPROTO_UNKNOWN : AppProto = 0;
 pub static mut ALPROTO_FAILED : AppProto = 0; // updated during init
+
+pub const IPPROTO_TCP : i32 = 6;
+pub const IPPROTO_UDP : i32 = 17;
 
 macro_rules!BIT_U64 {
     ($x:expr) => (1 << $x);
@@ -61,19 +63,19 @@ extern {
 
 #[allow(non_snake_case)]
 pub type SCLogMessageFunc =
-    extern "C" fn(level: libc::c_int,
-                  filename: *const libc::c_char,
-                  line: libc::c_uint,
-                  function: *const libc::c_char,
-                  code: libc::c_int,
-                  message: *const libc::c_char) -> libc::c_int;
+    extern "C" fn(level: std::os::raw::c_int,
+                  filename: *const std::os::raw::c_char,
+                  line: std::os::raw::c_uint,
+                  function: *const std::os::raw::c_char,
+                  code: std::os::raw::c_int,
+                  message: *const std::os::raw::c_char) -> std::os::raw::c_int;
 
 pub type DetectEngineStateFreeFunc =
     extern "C" fn(state: *mut DetectEngineState);
 
 pub type AppLayerDecoderEventsSetEventRawFunc =
     extern "C" fn (events: *mut *mut AppLayerDecoderEvents,
-                   event: libc::uint8_t);
+                   event: u8);
 
 pub type AppLayerDecoderEventsFreeEventsFunc =
     extern "C" fn (events: *mut *mut AppLayerDecoderEvents);
@@ -162,7 +164,7 @@ pub fn sc_detect_engine_state_free(state: *mut DetectEngineState)
 
 /// AppLayerDecoderEventsSetEventRaw wrapper.
 pub fn sc_app_layer_decoder_events_set_event_raw(
-    events: *mut *mut AppLayerDecoderEvents, event: libc::uint8_t)
+    events: *mut *mut AppLayerDecoderEvents, event: u8)
 {
     unsafe {
         if let Some(c) = SC {

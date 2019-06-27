@@ -30,6 +30,7 @@
 #include "app-layer.h"
 #include "app-layer-parser.h"
 #include "util-profiling.h"
+#include "util-validate.h"
 
 typedef struct OutputLoggerThreadStore_ {
     void *thread_data;
@@ -71,7 +72,7 @@ int OutputRegisterTxLogger(LoggerId id, const char *name, AppProto alproto,
                            ThreadDeinitFunc ThreadDeinit,
                            void (*ThreadExitPrintStats)(ThreadVars *, void *))
 {
-    if (!(AppLayerParserIsTxAware(alproto))) {
+    if (alproto != ALPROTO_UNKNOWN && !(AppLayerParserIsTxAware(alproto))) {
         SCLogNotice("%s logger not enabled: protocol %s is disabled",
             name, AppProtoToString(alproto));
         return -1;
@@ -92,7 +93,9 @@ int OutputRegisterTxLogger(LoggerId id, const char *name, AppProto alproto,
     op->ThreadDeinit = ThreadDeinit;
     op->ThreadExitPrintStats = ThreadExitPrintStats;
 
-    if (tc_log_progress < 0) {
+    if (alproto == ALPROTO_UNKNOWN) {
+        op->tc_log_progress = 0;
+    } else if (tc_log_progress < 0) {
         op->tc_log_progress =
             AppLayerParserGetStateProgressCompletionStatus(alproto,
                                                            STREAM_TOCLIENT);
@@ -100,7 +103,9 @@ int OutputRegisterTxLogger(LoggerId id, const char *name, AppProto alproto,
         op->tc_log_progress = tc_log_progress;
     }
 
-    if (ts_log_progress < 0) {
+    if (alproto == ALPROTO_UNKNOWN) {
+        op->ts_log_progress = 0;
+    } else if (ts_log_progress < 0) {
         op->ts_log_progress =
             AppLayerParserGetStateProgressCompletionStatus(alproto,
                                                            STREAM_TOSERVER);
@@ -129,7 +134,7 @@ int OutputRegisterTxLogger(LoggerId id, const char *name, AppProto alproto,
 
 static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
 {
-    BUG_ON(thread_data == NULL);
+    DEBUG_VALIDATE_BUG_ON(thread_data == NULL);
     if (list == NULL) {
         /* No child loggers registered. */
         return TM_ECODE_OK;
@@ -143,8 +148,6 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
     const uint8_t ipproto = f->proto;
     const AppProto alproto = f->alproto;
 
-    if (AppLayerParserProtocolIsTxAware(p->proto, alproto) == 0)
-        goto end;
     if (AppLayerParserProtocolHasLogger(p->proto, alproto) == 0)
         goto end;
     const LoggerId logger_expectation = AppLayerParserProtocolGetLoggerBits(p->proto, alproto);
@@ -193,21 +196,23 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
 
         const OutputTxLogger *logger = list;
         const OutputLoggerThreadStore *store = op_thread_data->store;
-#ifdef DEBUG_VALIDATION
-        BUG_ON(logger == NULL && store != NULL);
-        BUG_ON(logger != NULL && store == NULL);
-        BUG_ON(logger == NULL && store == NULL);
-#endif
-        while (logger && store) {
-            BUG_ON(logger->LogFunc == NULL);
 
-            SCLogDebug("logger %p, LogCondition %p, ts_log_progress %d "
-                    "tc_log_progress %d", logger, logger->LogCondition,
+        DEBUG_VALIDATE_BUG_ON(logger == NULL && store != NULL);
+        DEBUG_VALIDATE_BUG_ON(logger != NULL && store == NULL);
+        DEBUG_VALIDATE_BUG_ON(logger == NULL && store == NULL);
+
+        while (logger && store) {
+            DEBUG_VALIDATE_BUG_ON(logger->LogFunc == NULL);
+
+            SCLogDebug("logger %p, Alproto %d LogCondition %p, ts_log_progress %d "
+                    "tc_log_progress %d", logger, logger->alproto, logger->LogCondition,
                     logger->ts_log_progress, logger->tc_log_progress);
-            if (logger->alproto == alproto &&
-                (tx_logged & (1<<logger->logger_id)) == 0)
-            {
-                SCLogDebug("alproto match, logging tx_id %"PRIu64, tx_id);
+            /* always invoke "wild card" tx loggers */
+            if (logger->alproto == ALPROTO_UNKNOWN ||
+                (logger->alproto == alproto &&
+                 (tx_logged_old & (1<<logger->logger_id)) == 0)) {
+
+                SCLogDebug("alproto match %d, logging tx_id %"PRIu64, logger->alproto, tx_id);
 
                 if (!(AppLayerParserStateIssetFlag(f->alparser,
                                                    APP_LAYER_PARSER_EOF))) {
@@ -230,22 +235,22 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
                     }
                 }
 
-                SCLogDebug("Logging tx_id %"PRIu64" to logger %d", tx_id,
-                    logger->logger_id);
+                SCLogDebug("Logging tx_id %"PRIu64" to logger %d", tx_id, logger->logger_id);
                 PACKET_PROFILING_LOGGER_START(p, logger->logger_id);
                 logger->LogFunc(tv, store->thread_data, p, f, alstate, tx, tx_id);
                 PACKET_PROFILING_LOGGER_END(p, logger->logger_id);
 
-                tx_logged |= (1<<logger->logger_id);
+                if (logger->alproto != ALPROTO_UNKNOWN) {
+                    tx_logged |= (1<<logger->logger_id);
+                }
             }
 
 next_logger:
             logger = logger->next;
             store = store->next;
-#ifdef DEBUG_VALIDATION
-            BUG_ON(logger == NULL && store != NULL);
-            BUG_ON(logger != NULL && store == NULL);
-#endif
+
+            DEBUG_VALIDATE_BUG_ON(logger == NULL && store != NULL);
+            DEBUG_VALIDATE_BUG_ON(logger != NULL && store == NULL);
         }
 
         if (tx_logged != tx_logged_old) {
@@ -270,6 +275,7 @@ next_logger:
 next_tx:
         if (!ires.has_next)
             break;
+        tx_id++;
     }
 
     /* Update the the last ID that has been logged with all

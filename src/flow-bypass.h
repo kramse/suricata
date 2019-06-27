@@ -30,17 +30,21 @@ struct flows_stats {
     uint64_t bytes;
 };
 
-typedef int (*BypassedCheckFunc)(struct flows_stats *bypassstats,
-                                 struct timespec *curtime);
-typedef int (*BypassedUpdateFunc)(Flow *f, Packet *p);
+typedef int (*BypassedCheckFunc)(ThreadVars *th_v,
+                                 struct flows_stats *bypassstats,
+                                 struct timespec *curtime, void *data);
+typedef int (*BypassedCheckFuncInit)(ThreadVars *th_v,
+                                     struct timespec *curtime, void *data);
+typedef int (*BypassedUpdateFunc)(Flow *f, Packet *p, void *data);
 
 void FlowAddToBypassed(Flow *f);
 
 void BypassedFlowManagerThreadSpawn(void);
 void TmModuleBypassedFlowManagerRegister(void);
 
-int BypassedFlowManagerRegisterCheckFunc(BypassedCheckFunc CheckFunc);
-int BypassedFlowManagerRegisterUpdateFunc(BypassedUpdateFunc UpdateFunc);
+int BypassedFlowManagerRegisterCheckFunc(BypassedCheckFunc CheckFunc,
+                                         BypassedCheckFuncInit CheckFuncInit, void *data);
+int BypassedFlowManagerRegisterUpdateFunc(BypassedUpdateFunc UpdateFunc, void *data);
 
 void BypassedFlowUpdate(Flow *f, Packet *p);
 
