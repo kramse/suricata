@@ -69,6 +69,11 @@ int DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
             DecodeIPV6(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
                        len - ETHERNET_HEADER_LEN, pq);
             break;
+        case ETHERNET_TYPE_ARP:
+            //printf("DecodeEthernet ip6\n");
+            DecodeARP(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                        len - ETHERNET_HEADER_LEN, pq);
+            break;
         case ETHERNET_TYPE_PPPOE_SESS:
             //printf("DecodeEthernet PPPOE Session\n");
             DecodePPPOESession(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
