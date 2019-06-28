@@ -28,9 +28,6 @@
 
 void DecodeVXLANRegisterTests(void);
 void DecodeVXLANConfig(void);
-<<<<<<< HEAD
-=======
 bool DecodeVXLANEnabledForPort(const uint16_t sp, const uint16_t dp);
->>>>>>> upstream/master
 
 #endif /* !__DECODE_VXLAN_H__ */
