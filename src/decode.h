@@ -79,6 +79,7 @@ enum PktSrcEnum {
 #include "decode-sll.h"
 #include "decode-ipv4.h"
 #include "decode-ipv6.h"
+#include "decode-arp.h"
 #include "decode-icmpv4.h"
 #include "decode-icmpv6.h"
 #include "decode-tcp.h"
@@ -525,6 +526,8 @@ typedef struct Packet_
 
     SCTPHdr *sctph;
 
+    ARPHdr *arph;
+
     ICMPV4Hdr *icmpv4h;
 
     ICMPV6Hdr *icmpv6h;
@@ -651,6 +654,7 @@ typedef struct DecodeThreadVars_
     uint16_t counter_ipv6;
     uint16_t counter_tcp;
     uint16_t counter_udp;
+    uint16_t counter_arp;
     uint16_t counter_icmpv4;
     uint16_t counter_icmpv6;
 

@@ -44,6 +44,11 @@ enum {
     IPV4_WRONG_IP_VER,              /**< wrong ip version in ip options */
     IPV4_WITH_ICMPV6,               /**< IPv4 packet with ICMPv6 header */
 
+    /* ARP EVENTS */
+    ARP_PKT_TOO_SMALL,              /**< ARP packet smaller than minimum size */
+    ARP_UNKNOWN_HARDWARE_FORMAT,    /**< ARP unknown hardware format */
+    ARP_UNKNOWN_OPERATION,          /**< ARP unknown operation */
+
     /* ICMP EVENTS */
     ICMPV4_PKT_TOO_SMALL,           /**< icmpv4 packet smaller than minimum size */
     ICMPV4_UNKNOWN_TYPE,            /**< icmpv4 unknown type */

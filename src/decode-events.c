@@ -44,6 +44,11 @@ const struct DecodeEvents_ DEvents[] = {
     { "decoder.ipv4.wrong_ip_version", IPV4_WRONG_IP_VER, },
     { "decoder.ipv4.icmpv6", IPV4_WITH_ICMPV6, },
 
+    /* ARP EVENTS */
+    { "decoder.arp.pkt_too_small", ARP_PKT_TOO_SMALL, },
+    { "decoder.arp.unknown_hardware_format", ARP_UNKNOWN_HARDWARE_FORMAT, },
+    { "decoder.arp.unknown_operation", ARP_UNKNOWN_OPERATION, },
+
     /* ICMP EVENTS */
     { "decoder.icmpv4.pkt_too_small", ICMPV4_PKT_TOO_SMALL, },
     { "decoder.icmpv4.unknown_type", ICMPV4_UNKNOWN_TYPE, },
