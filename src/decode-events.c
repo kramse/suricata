@@ -46,9 +46,11 @@ const struct DecodeEvents_ DEvents[] = {
 
     /* ARP EVENTS */
     { "decoder.arp.pkt_too_small", ARP_PKT_TOO_SMALL, },
+    { "decoder.arp.pkt_truncated", ARP_PKT_TRUNCATED, },
     { "decoder.arp.unknown_hardware_format", ARP_UNKNOWN_HARDWARE_FORMAT, },
+    { "decoder.arp.unknown_protocol", ARP_UNKNOWN_PROTOCOL, },
     { "decoder.arp.unknown_operation", ARP_UNKNOWN_OPERATION, },
-
+    
     /* ICMP EVENTS */
     { "decoder.icmpv4.pkt_too_small", ICMPV4_PKT_TOO_SMALL, },
     { "decoder.icmpv4.unknown_type", ICMPV4_UNKNOWN_TYPE, },

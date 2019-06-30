@@ -50,9 +50,9 @@ int DecodeARP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
 {
     StatsIncr(tv, dtv->counter_arp);
 
-    if (len < ARP_HEADER_LEN) {
+    if (unlikely(len < ETHERNET_HEADER_LEN + ARP_HEADER_LEN)) {
         ENGINE_SET_INVALID_EVENT(p, ARP_PKT_TOO_SMALL);
-        return TM_ECODE_FAILED;
+        return -1;
     }
 
     p->arph = (ARPHdr *)(pkt + ETHERNET_HEADER_LEN);
@@ -94,6 +94,22 @@ int DecodeARP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
             ENGINE_SET_EVENT(p,ARP_UNKNOWN_HARDWARE_FORMAT);
     }
 
+    switch (SCNtohs(p->arph->ar_pro))
+    {
+        case ETHERNET_TYPE_IP:
+            printf("protocol type IPv4 ");
+            int arp_len;
+            arp_len = 2 * ( (u_int8_t) p->arph->ar_hln + (u_int8_t) p->arph->ar_pln );
+            if (len < ETHERNET_HEADER_LEN + ARP_HEADER_LEN + arp_len) {
+                ENGINE_SET_INVALID_EVENT(p, ARP_PKT_TRUNCATED);
+                return -1;
+            }
+            break;
+        default:
+            printf("ARP protocol type unknown\n");
+            ENGINE_SET_EVENT(p,ARP_UNKNOWN_PROTOCOL);
+    }
+
     switch (SCNtohs(p->arph->ar_op))
     {
         case ARPOP_REQUEST:
@@ -102,23 +118,23 @@ int DecodeARP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
             break;
         case ARPOP_REPLY:
             /* response to previous request */
-            printf("ARP operation ARPOP_REPLY\n");
+            printf("ARP operation REPLY\n");
             break;
         case ARPOP_REVREQUEST:
             /* request protocol address given hardware */
-            printf("ARP operation ARPOP_REVREQUEST\n");
+            printf("ARP operation REVREQUEST\n");
             break;
         case ARPOP_REVREPLY:
             /* response giving protocol address */
-            printf("ARP operation ARPOP_REVREPLY\n");
+            printf("ARP operation REVREPLY\n");
             break;
         case ARPOP_INVREQUEST:
             /* request to identify peer */
-            printf("ARP operation ARPOP_INVREQUEST\n");
+            printf("ARP operation INVREQUEST\n");
             break;
         case ARPOP_INVREPLY:
             /* response identifying peer */
-            printf("ARP operation ARPOP_INVREPLY\n");
+            printf("ARP operation INVREPLY\n");
             break;
 
         default:
@@ -127,7 +143,6 @@ int DecodeARP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
 
     }
 
-    FlowSetupPacket(p);
     return TM_ECODE_OK;
 }
 

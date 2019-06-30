@@ -46,7 +46,9 @@ enum {
 
     /* ARP EVENTS */
     ARP_PKT_TOO_SMALL,              /**< ARP packet smaller than minimum size */
+    ARP_PKT_TRUNCATED,              /**< ARP packet smaller than minimum size */
     ARP_UNKNOWN_HARDWARE_FORMAT,    /**< ARP unknown hardware format */
+    ARP_UNKNOWN_PROTOCOL,           /**< ARP unknown protocol - only IPv4 known */
     ARP_UNKNOWN_OPERATION,          /**< ARP unknown operation */
 
     /* ICMP EVENTS */
